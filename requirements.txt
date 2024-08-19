@@ -1,0 +1,6 @@
+pydantic
+# transformers is not needed for the model code, but is used for:
+# - tokenizers
+# - parity-testing against HF implementations
+# - loading HF model weights
+transformers

@@ -1,0 +1,109 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "T5 bucket test",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "scripts.t5_bucket_test",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "args": [],
+            "env": {
+                "TORCH_COMPILE_DISABLE": "1",
+                "TORCHINDUCTOR_COMPILE_THREADS": "1",
+            }
+        },
+        {
+            "name": "T5 encoder parity",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "scripts.t5_encoder_parity",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "args": [],
+            "env": {
+                "TORCH_COMPILE_DISABLE": "1",
+                "TORCHINDUCTOR_COMPILE_THREADS": "1",
+            }
+        },
+        {
+            "name": "T5 enc-dec parity",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "scripts.t5_encdec_parity",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "args": [],
+            "env": {
+                "TORCH_COMPILE_DISABLE": "1",
+                "TORCHINDUCTOR_COMPILE_THREADS": "1",
+            }
+        },
+        {
+            "name": "T5 sampling (HF generate vs greedy loop)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "scripts.t5_sampling_hf_generate",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "args": [],
+            "env": {
+                "TORCH_COMPILE_DISABLE": "1",
+                "TORCHINDUCTOR_COMPILE_THREADS": "1",
+            }
+        },
+        {
+            "name": "T5 sampling parity (based vs HF, no cache)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "scripts.t5_sampling_parity_nocache",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "args": [],
+            "env": {
+                "TORCH_COMPILE_DISABLE": "1",
+                "TORCHINDUCTOR_COMPILE_THREADS": "1",
+            }
+        },
+        {
+            "name": "T5 sampling parity (based vs HF, cache)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "scripts.t5_sampling_parity_cache",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "args": [],
+            "env": {
+                "TORCH_COMPILE_DISABLE": "1",
+                "TORCHINDUCTOR_COMPILE_THREADS": "1",
+            }
+        },
+        {
+            "name": "Serialize T5",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "scripts.t5_serialize",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "args": [
+                "--model-name", "google/t5-v1_1-small",
+                "--out-dir", "/mnt/clusterstorage/models/t5-goog/t5-v1_1-small",
+            ],
+            "env": {
+                "TORCH_COMPILE_DISABLE": "1",
+                "TORCHINDUCTOR_COMPILE_THREADS": "1",
+            }
+        },
+    ]
+}

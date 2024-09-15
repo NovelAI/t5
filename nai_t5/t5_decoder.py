@@ -8,7 +8,16 @@ from torch.nn import Linear
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.functional import scaled_dot_product_attention
 
-from .t5_common import RMSNorm_f32, T5GEGLUFFN, T5Config, T5RelativeAttentionBias, T5ReLUFFN, flash_attention_flops, get_ffn_factory
+from .t5_common import (
+    RMSNorm_f32,
+    T5GEGLUFFN,
+    T5Config,
+    T5RelativeAttentionBias,
+    T5ReLUFFN,
+    clamp_inf_if_float16,
+    flash_attention_flops,
+    get_ffn_factory,
+)
 
 ####
 #### T5 decoder cross-attention
@@ -240,16 +249,19 @@ class T5DecoderLayer(nn.Module):
         )
 
         x = residual + self.dropout(self_attn_out)
+        x = clamp_inf_if_float16(x)
 
         residual = x
         x = self.ln2(x)
         cross_attn_out: FloatTensor = self.cross_attn(x, encoding, mask=cross_attn_mask, kv=cross_kv)
         x = residual + self.dropout(cross_attn_out)
+        x = clamp_inf_if_float16(x)
 
         residual = x
         x = self.ffn(self.ln3(x))
 
         x = residual + self.dropout(x)
+        x = clamp_inf_if_float16(x)
 
         return x
 

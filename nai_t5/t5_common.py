@@ -346,3 +346,26 @@ def flash_attention_flops(
         assert not causal, "we don't know how well attention can take advantage of sparsity in causal cross-attention."
     f = 4 * batch * nheads * q_len * kv_len * headdim // (2 if causal else 1)
     return f if mode == "fwd" else (2.5 * f if mode == "bwd" else 3.5 * f)
+
+
+####
+#### Float16 clamper
+####
+
+
+f16_info = torch.finfo(torch.float16)
+f16_safermin = f16_info.min + 1000
+f16_safermax = f16_info.max - 1000
+
+# based on HF transformers' T5 float16 adaptations
+# Apache-licensed
+# https://github.com/huggingface/transformers/blob/main/LICENSE
+# credit: Suraj Patil
+# https://github.com/huggingface/transformers/pull/9487
+# credit: Prathik Rao
+# https://github.com/huggingface/transformers/pull/22097
+def clamp_inf_if_float16(x: FloatTensor) -> FloatTensor:
+    """clamp activations to give """
+    if x.dtype == torch.float16:
+        x.clamp_(x, min=f16_safermin, max=f16_safermax)
+    return x

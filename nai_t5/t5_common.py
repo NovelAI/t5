@@ -7,6 +7,7 @@ import torch
 from einops import rearrange
 from torch import FloatTensor, LongTensor, Tensor, nn
 from torch.nn import Linear, Embedding
+from torch.nn.modules.normalization import RMSNorm, _shape_t
 from torch.amp import autocast
 
 ####
@@ -278,49 +279,26 @@ def get_ffn_factory(ffn_type: T5FFNType) -> Type[T5ReLUFFN | T5GEGLUFFN]:
 ####
 
 
-@autocast(device_type='cuda', enabled=False)
-def f_rms_norm(x, weight: Optional[torch.nn.Parameter], eps=1e-5):
-    variance = x.pow(2).mean(-1, keepdim=True)
-    x = x * torch.rsqrt(variance + eps)
-    if weight is None:
-        return x
-    return weight * x
-
-
-# default eps seems to be 1e-5 for llama2
-@autocast(device_type='cuda', enabled=False)
-class RMSNorm_f32(nn.Module):
+class RMSNorm_f32(RMSNorm):
     def __init__(
         self,
-        normalized_shape,
-        eps: float = 1e-5,
+        normalized_shape: _shape_t,
+        eps: Optional[float] = None,
         elementwise_affine: bool = True,
         device: str | torch.device | None = None,
         # dtype: torch.dtype = torch.float32,
     ) -> None:
-        super().__init__()
-        self.normalized_shape = normalized_shape
-        self.elementwise_affine = elementwise_affine
-        self.eps = eps
-        if elementwise_affine:
-            self.weight = nn.Parameter(torch.empty(normalized_shape, device=device, dtype=torch.float32))
+        super().__init__(
+            normalized_shape,
+            eps=eps,
+            elementwise_affine=elementwise_affine,
+            device=device,
+            dtype=torch.float32,
+        )
 
-        else:
-            self.register_parameter("weight", None)
-
-        self.reset_parameters()
-
-    def reset_parameters(self) -> None:
-        if self.elementwise_affine:
-            torch.nn.init.ones_(self.weight)
-
-    # @torch.compile
     @autocast(device_type='cuda', enabled=False)
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        return f_rms_norm(input.float(), self.weight, self.eps).to(input.dtype)
-
-    def extra_repr(self) -> str:
-        return "eps={eps}, elementwise_affine={elementwise_affine}".format(**self.__dict__)
+    def forward(self, input: Tensor) -> Tensor:
+        return super().forward(input.float()).type_as(input)
 
 
 ####

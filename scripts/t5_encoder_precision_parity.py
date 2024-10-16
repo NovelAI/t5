@@ -144,6 +144,10 @@ def main():
                             print(f'{model_name} {f"{name}.wi_0":35s}:', stats(wi_0))
                             print(f'{model_name} {f"{name}.wi_1":35s}:', stats(wi_1))
                         else:
+                            if name.endswith('o_proj'):
+                                (attn,) = args
+                                out_list.append(NamedActivation(f'{name} [input]', attn))
+                                print(f'{model_name} {f"{name} [input]":35s}:', stats(attn))
                             out_list.append(NamedActivation(name, output))
                             print(f'{model_name} {name:35s}:', stats(output))
                     handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
@@ -158,6 +162,9 @@ def main():
                 case RMSNormCast():
                     if not name.startswith('layers.0'): continue
                     def hook(mod, args, output, name: str):
+                        (input,) = args
+                        out_list.append(NamedActivation(f'{name} [input]', input))
+                        print(f'{model_name} {f"{name} [input]":35s}:', stats(input))
                         out_list.append(NamedActivation(name, output))
                         print(f'{model_name} {name:35s}:', stats(output))
                     handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))

@@ -1,11 +1,12 @@
-from typing import Any
+from typing import Any, Callable, NamedTuple
 import json
 from pathlib import Path
 from enum import Enum
+from contextlib import nullcontext
 
 import torch
 from torch import FloatTensor, LongTensor, BoolTensor, Tensor, inference_mode
-from torch.amp import autocast_mode
+from torch.amp.autocast_mode import autocast
 from tensorizer import TensorDeserializer
 from sentencepiece import SentencePieceProcessor
 
@@ -18,10 +19,24 @@ def fmt_matrix_norm(t: Tensor) -> str:
     t = t.squeeze().cpu()
     if t.numel() == 1:
         return f'{t.item():.2f}'
+    if t.numel() > 4:
+        return f'avg {t.mean().item():.2f}'
     return str(t)
+def stats(t: Tensor, label: Optional[str] = None) -> str:
+    return ' '.join((str(val) for val in (f'{str(tuple(t.shape)):14s}', f"{str(t.dtype).removeprefix('torch.'):8s}", f'σ={t.std().item():g}', f'μ={t.mean().item():.2f}', f'norm={fmt_matrix_norm(matrix_norm(t.float(), ord=2))}', f'absmax={t.abs().max().item():g}', label or '')))
 def stat(t: Tensor, label: Optional[str] = None) -> None:
-    print(tuple(t.shape), str(t.dtype).removeprefix('torch.'), f'σ={t.std().item():g}', f'μ={t.mean().item():.2f}', f'norm={fmt_matrix_norm(matrix_norm(t.float(), ord=2))}', f'absmax={t.abs().max().item():g}', label or '')
+    print(stats(t, label))
 
+from functools import partial
+from torch.utils.hooks import RemovableHandle
+from contextlib import contextmanager
+
+@contextmanager
+def fin(dtor):
+    try:
+        yield
+    finally:
+        dtor()
 
 class PrecisionMode(str, Enum):
     Float32 = 'f32'
@@ -29,7 +44,13 @@ class PrecisionMode(str, Enum):
     PureBF16 = 'pure-bf16'
     PureF16 = 'pure-f16'
 
-def get_model(dir: Path) -> T5EncoderStack:
+
+class EncAndConfig(NamedTuple):
+    enc: T5EncoderStack
+    conf: T5Config
+
+
+def get_model(dir: Path) -> EncAndConfig:
     with open(dir / 'config.json', 'r') as f:
         conf_dict: dict[str, Any] = json.load(f)
     config: T5Config = T5Config.model_validate(conf_dict)
@@ -40,7 +61,7 @@ def get_model(dir: Path) -> T5EncoderStack:
     deserializer = TensorDeserializer(dir / 'enc.tensors', lazy_load=True)
     deserializer.load_into_module(enc)
     deserializer.close()
-    return enc
+    return EncAndConfig(enc, config)
 
 def explain_diff(ref: FloatTensor, candidate: FloatTensor) -> FloatTensor:
     diff = ref.float().sub(candidate.float())
@@ -50,22 +71,137 @@ def explain_diff(ref: FloatTensor, candidate: FloatTensor) -> FloatTensor:
     stat(diff, 'diff')
 
 
+class NamedActivation(NamedTuple):
+    name: str
+    act: FloatTensor
+
 def main():
     device = torch.device("cuda")
 
     f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-small-f32')
     f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-small-f16')
     bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-small-bf16')
+    # f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-xl-f32')
+    # f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-xl-f16')
+    # bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-xl-bf16')
+    # f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog-v1/t5-large-f32')
+    # f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog-v1/t5-large-f16')
+    # bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog-v1/t5-large-bf16')
+    # f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/eleuther/pile-t5-large-f32')
+    # f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/eleuther/pile-t5-large-f16')
+    # bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/eleuther/pile-t5-large-bf16')
 
     f32_enc: Optional[T5EncoderStack] = None
     f16_enc: Optional[T5EncoderStack] = None
     bf16_enc: Optional[T5EncoderStack] = None
-    if f32_enabled := False:
-        f32_enc: T5EncoderStack = get_model(f32_dir)
-    if f16_enabled := False:
-        f16_enc: T5EncoderStack = get_model(f16_dir)
+    f32_config: Optional[T5Config] = None
+    f16_config: Optional[T5Config] = None
+    bf16_config: Optional[T5Config] = None
+    if f32_enabled := True:
+        f32_enc, f32_config = get_model(f32_dir)
+    if f16_enabled := True:
+        f16_enc, f16_config = get_model(f16_dir)
     if bf16_enabled := False:
-        bf16_enc: T5EncoderStack = get_model(bf16_dir)
+        bf16_enc, bf16_config = get_model(bf16_dir)
+
+    f32_activations: list[NamedActivation] = []
+    f16_activations: list[NamedActivation] = []
+    bf16_activations: list[NamedActivation] = []
+
+    def instrument_nai_t5(module: T5EncoderStack, config: T5Config, out_list: list[NamedActivation], model_name: str) -> Callable[[], None]:
+        from torch.nn import GELU, Embedding, Linear
+        from nai_t5.t5_common import RMSNormCast, T5GEGLUFFN
+        from nai_t5.t5_encoder import T5EncoderLayer
+        handles: list[RemovableHandle] = []
+        for name, mod in module.named_modules():
+            match mod:
+                case Embedding():
+                    def hook(mod, args, output, name: str):
+                        if config.pos_emb_per_layer and name.endswith('bias_emb'):
+                            for ix, b in enumerate(output.unflatten(-1, (config.num_layers, -1)).unbind(-2)):
+                                out_list.append(NamedActivation(f'{name}.{ix}', b))
+                                print(f'{model_name} {f"{name}.{ix}":35s}:', stats(b))
+                        else:
+                            out_list.append(NamedActivation(name, output))
+                            print(f'{model_name} {name:35s}:', stats(output))
+                    handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
+                    handles.append(handle)
+                case Linear():
+                    if not name.startswith('layers.0'): continue
+                    def hook(mod, args, output, name: str):
+                        if name.endswith('qkv_proj'):
+                            q, k, v = output.chunk(3, dim=-1)
+                            out_list.append(NamedActivation(f'{name}.q', q))
+                            out_list.append(NamedActivation(f'{name}.k', k))
+                            out_list.append(NamedActivation(f'{name}.v', v))
+                            print(f'{model_name} {f"{name}.q":35s}:', stats(q))
+                            print(f'{model_name} {f"{name}.k":35s}:', stats(k))
+                            print(f'{model_name} {f"{name}.v":35s}:', stats(v))
+                        elif name.endswith('ff_in'):
+                            wi_0, wi_1 = output.chunk(2, dim=-1)
+                            out_list.append(NamedActivation(f'{name}.wi_0', wi_0))
+                            out_list.append(NamedActivation(f'{name}.wi_1', wi_1))
+                            print(f'{model_name} {f"{name}.wi_0":35s}:', stats(wi_0))
+                            print(f'{model_name} {f"{name}.wi_1":35s}:', stats(wi_1))
+                        else:
+                            out_list.append(NamedActivation(name, output))
+                            print(f'{model_name} {name:35s}:', stats(output))
+                    handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
+                    handles.append(handle)
+                case T5EncoderLayer():
+                    if name != 'layers.0': continue
+                    def hook(mod, args, output, name: str):
+                        out_list.append(NamedActivation(name, output))
+                        print(f'{model_name} {name:35s}:', stats(output))
+                    handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
+                    handles.append(handle)
+                case RMSNormCast():
+                    if not name.startswith('layers.0'): continue
+                    def hook(mod, args, output, name: str):
+                        out_list.append(NamedActivation(name, output))
+                        print(f'{model_name} {name:35s}:', stats(output))
+                    handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
+                    handles.append(handle)
+                case GELU():
+                    if not name.startswith('layers.0'): continue
+                    def hook(mod, args, output, name: str):
+                        out_list.append(NamedActivation(name, output))
+                        print(f'{model_name} {name:35s}:', stats(output))
+                    handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
+                    handles.append(handle)
+                case T5GEGLUFFN():
+                    if not name.startswith('layers.0'): continue
+                    def hook(mod, args, output, name: str):
+                        out_list.append(NamedActivation(name, output))
+                        print(f'{model_name} {name:35s}:', stats(output))
+                    handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
+                    handles.append(handle)
+        def dtor():
+            for handle in handles:
+                handle.remove()
+        return dtor
+    
+    # for (k32, v32), (k16, v16) in zip(f32_enc.state_dict().items(), f16_enc.state_dict().items()):
+    #     assert k32 == k16, f'{k32} != {k16}'
+    #     assert v16.allclose(v32.half()), f'{k32} differs'
+    # from torch.linalg import norm
+    # with inference_mode():
+    #     for k32, v32 in f32_enc.state_dict().items():
+    #         assert (v32 > torch.finfo(torch.float16).max).sum() == 0, f"{k32} exceeds f16 max"
+    #         assert (v32 < torch.finfo(torch.float16).min).sum() == 0, f"{k32} under f16 min"
+    # with inference_mode():
+    #     for name, mod in f32_enc.named_modules():
+    #         from torch.nn import Linear, Embedding
+    #         match mod:
+    #             case Embedding():
+    #                 # print(f'{name:25s}: {norm(mod.weight, ord=2, dim=-1).div_(mod.weight.size(-1)**.5).max()}')
+    #                 # print(f'{name:25s}: {norm(mod.weight, ord=2)}')
+    #                 print(f'{name:25s}: {norm(mod.weight, ord=2).div_(mod.weight.numel()**.5)}')
+    #             case Linear():
+    #                 # print(f'{name:25s}: {norm(mod.weight, ord=2, dim=-2).div_(mod.weight.size(-2)**.5).max()}')
+    #                 # print(f'{name:25s}: {norm(mod.weight, ord=2)}')
+    #                 print(f'{name:25s}: {norm(mod.weight, ord=2).div_(mod.weight.numel()**.5)}')
+    pass
 
     tokenizer = SentencePieceProcessor(model_file=str(f32_dir / 'spiece.model'))
     
@@ -82,13 +218,19 @@ def main():
     mask: BoolTensor = input_ids != tokenizer.pad_id()
 
     seed = 42
-    with inference_mode():#, autocast_mode(device_type=device.type, dtype=torch.float16):
+    with (
+        inference_mode(),
+        fin(instrument_nai_t5(f32_enc, f32_config, f32_activations, ' f32')) if f32_enabled else nullcontext(),
+        fin(instrument_nai_t5(f16_enc, f16_config, f16_activations, ' f16')) if f16_enabled else nullcontext(),
+        fin(instrument_nai_t5(bf16_enc, bf16_config, bf16_activations, 'bf16')) if bf16_enabled else nullcontext(),
+    ):
         torch.manual_seed(seed)
         if f32_enabled:
             f32_out: FloatTensor = f32_enc(
                 input_ids=input_ids,
                 input_mask=mask,
             )
+            assert f32_out.isfinite().all(), 'f32_out has non-finite values'
         if bf16_enabled:
             bf16_out: FloatTensor = bf16_enc(
                 input_ids=input_ids,

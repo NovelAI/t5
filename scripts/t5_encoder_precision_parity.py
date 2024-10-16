@@ -7,10 +7,12 @@ from contextlib import nullcontext
 import torch
 from torch import FloatTensor, LongTensor, BoolTensor, Tensor, inference_mode
 from torch.amp.autocast_mode import autocast
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from tensorizer import TensorDeserializer
 from sentencepiece import SentencePieceProcessor
 
 from nai_t5 import T5Config, T5EncoderStack
+from nai_t5.t5_encoder import T5EncoderLayer
 
 from torch import Tensor
 from typing import Optional
@@ -241,12 +243,33 @@ def main():
     input_ids = input_ids.to(device)
     mask: BoolTensor = input_ids != tokenizer.pad_id()
 
+    qk_rebalance = 1
+    vo_rebalance = 1
+    print('qk_rebalance:', qk_rebalance)
+    print('vo_rebalance:', vo_rebalance)
+    with inference_mode():
+        for f16_layer, f32_layer in zip(f16_enc.layers, f32_enc.layers):
+            f16_layer: T5EncoderLayer
+            f32_layer: T5EncoderLayer
+            q16, k16, v16 = f16_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
+            q32, k32, v32 = f32_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
+            o16 = f16_layer.attn.o_proj.weight
+            o32 = f32_layer.attn.o_proj.weight
+            if qk_rebalance != 1:
+                q16.copy_(q32.div(qk_rebalance).half())
+                k16.copy_(k32.mul(qk_rebalance).half())
+            if vo_rebalance != 1:
+                v16.copy_(v32.div(vo_rebalance).half())
+                o16.copy_(o32.mul(vo_rebalance).half())
+            break
+
     seed = 42
     with (
         inference_mode(),
         fin(instrument_nai_t5(f32_enc, f32_config, f32_activations, ' f32')) if f32_enabled else nullcontext(),
         fin(instrument_nai_t5(f16_enc, f16_config, f16_activations, ' f16')) if f16_enabled else nullcontext(),
         fin(instrument_nai_t5(bf16_enc, bf16_config, bf16_activations, 'bf16')) if bf16_enabled else nullcontext(),
+        sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION),
     ):
         torch.manual_seed(seed)
         if f32_enabled:

@@ -247,11 +247,19 @@ def main():
         if f16_enabled:
             print('f32 vs f16:')
             explain_diff(f32_out, f16_out)
+            qs = torch.tensor([.5, .75, .9, .95, .99, .999, .9999], device=device)
+            print("abs differences between layer activations...")
+            print("quantiles:")
+            print(str(qs.cpu()).removeprefix("tensor(").removesuffix(")"))
+            torch.set_printoptions(linewidth=200)
+            for f32_act, f16_act in zip(f32_activations, f16_activations):
+                diff = f32_act.act.float().sub(f16_act.act.float())
+                absdiff = diff.abs()
+                print(f'{f32_act.name:35s}: {stats(absdiff):80s} {str(absdiff.quantile(qs).cpu()).removeprefix("tensor(").removesuffix(")")}')
         if bf16_enabled:
             print('f32 vs bf16:')
             explain_diff(f32_out, bf16_out)
     pass  # somewhere to put your breakpoint
-
 
 if __name__ == "__main__":
     main()

@@ -33,6 +33,20 @@
             }
         },
         {
+            "name": "T5 encoder precision parity",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "scripts.t5_encoder_precision_parity",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": false,
+            "args": [],
+            "env": {
+                "TORCH_COMPILE_DISABLE": "1",
+                "TORCHINDUCTOR_COMPILE_THREADS": "1",
+            }
+        },
+        {
             "name": "T5 enc-dec parity",
             "type": "debugpy",
             "request": "launch",

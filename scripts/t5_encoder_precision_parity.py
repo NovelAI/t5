@@ -91,6 +91,7 @@ def main():
     # f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/eleuther/pile-t5-large-f16')
     # bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/eleuther/pile-t5-large-bf16')
 
+    do_autocast = False
     f32_enc: Optional[T5EncoderStack] = None
     f16_enc: Optional[T5EncoderStack] = None
     bf16_enc: Optional[T5EncoderStack] = None
@@ -103,6 +104,8 @@ def main():
         f16_enc, f16_config = get_model(f16_dir)
     if bf16_enabled := False:
         bf16_enc, bf16_config = get_model(bf16_dir)
+    
+    print_first_block_only = True
 
     f32_activations: list[NamedActivation] = []
     f16_activations: list[NamedActivation] = []
@@ -120,20 +123,25 @@ def main():
                         if config.pos_emb_per_layer and name.endswith('bias_emb'):
                             for ix, b in enumerate(output.unflatten(-1, (config.num_layers, -1)).unbind(-2)):
                                 out_list.append(NamedActivation(f'{name}.{ix}', b))
+                                assert b.isfinite().all(), f'{model_name} {name}.{ix} has non-finite values'
                                 print(f'{model_name} {f"{name}.{ix}":35s}:', stats(b))
                         else:
                             out_list.append(NamedActivation(name, output))
+                            assert output.isfinite().all(), f'{model_name} {name} has non-finite values'
                             print(f'{model_name} {name:35s}:', stats(output))
                     handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
                     handles.append(handle)
                 case Linear():
-                    if not name.startswith('layers.0'): continue
+                    if print_first_block_only and not name.startswith('layers.0'): continue
                     def hook(mod, args, output, name: str):
                         if name.endswith('qkv_proj'):
                             q, k, v = output.chunk(3, dim=-1)
                             out_list.append(NamedActivation(f'{name}.q', q))
                             out_list.append(NamedActivation(f'{name}.k', k))
                             out_list.append(NamedActivation(f'{name}.v', v))
+                            assert q.isfinite().all(), f'{model_name} {name}.q has non-finite values'
+                            assert k.isfinite().all(), f'{model_name} {name}.k has non-finite values'
+                            assert v.isfinite().all(), f'{model_name} {name}.v has non-finite values'
                             print(f'{model_name} {f"{name}.q":35s}:', stats(q))
                             print(f'{model_name} {f"{name}.k":35s}:', stats(k))
                             print(f'{model_name} {f"{name}.v":35s}:', stats(v))
@@ -141,45 +149,54 @@ def main():
                             wi_0, wi_1 = output.chunk(2, dim=-1)
                             out_list.append(NamedActivation(f'{name}.wi_0', wi_0))
                             out_list.append(NamedActivation(f'{name}.wi_1', wi_1))
+                            assert wi_0.isfinite().all(), f'{model_name} {name}.wi_0 has non-finite values'
+                            assert wi_1.isfinite().all(), f'{model_name} {name}.wi_1 has non-finite values'
                             print(f'{model_name} {f"{name}.wi_0":35s}:', stats(wi_0))
                             print(f'{model_name} {f"{name}.wi_1":35s}:', stats(wi_1))
                         else:
                             if name.endswith('o_proj'):
                                 (attn,) = args
                                 out_list.append(NamedActivation(f'{name} [input]', attn))
+                                assert attn.isfinite().all(), f'{model_name} {name} [input] has non-finite values'
                                 print(f'{model_name} {f"{name} [input]":35s}:', stats(attn))
                             out_list.append(NamedActivation(name, output))
+                            assert output.isfinite().all(), f'{model_name} {name} has non-finite values'
                             print(f'{model_name} {name:35s}:', stats(output))
                     handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
                     handles.append(handle)
                 case T5EncoderLayer():
-                    if name != 'layers.0': continue
+                    if print_first_block_only and name != 'layers.0': continue
                     def hook(mod, args, output, name: str):
                         out_list.append(NamedActivation(name, output))
+                        assert output.isfinite().all(), f'{model_name} {name} has non-finite values'
                         print(f'{model_name} {name:35s}:', stats(output))
                     handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
                     handles.append(handle)
                 case RMSNormCast():
-                    if not name.startswith('layers.0'): continue
+                    if print_first_block_only and not name.startswith('layers.0'): continue
                     def hook(mod, args, output, name: str):
                         (input,) = args
                         out_list.append(NamedActivation(f'{name} [input]', input))
+                        assert input.isfinite().all(), f'{model_name} {name} [input] has non-finite values'
                         print(f'{model_name} {f"{name} [input]":35s}:', stats(input))
                         out_list.append(NamedActivation(name, output))
+                        assert output.isfinite().all(), f'{model_name} {name} has non-finite values'
                         print(f'{model_name} {name:35s}:', stats(output))
                     handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
                     handles.append(handle)
                 case GELU():
-                    if not name.startswith('layers.0'): continue
+                    if print_first_block_only and not name.startswith('layers.0'): continue
                     def hook(mod, args, output, name: str):
                         out_list.append(NamedActivation(name, output))
+                        assert output.isfinite().all(), f'{model_name} {name} has non-finite values'
                         print(f'{model_name} {name:35s}:', stats(output))
                     handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
                     handles.append(handle)
                 case T5GEGLUFFN():
-                    if not name.startswith('layers.0'): continue
+                    if print_first_block_only and not name.startswith('layers.0'): continue
                     def hook(mod, args, output, name: str):
                         out_list.append(NamedActivation(name, output))
+                        assert output.isfinite().all(), f'{model_name} {name} has non-finite values'
                         print(f'{model_name} {name:35s}:', stats(output))
                     handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
                     handles.append(handle)
@@ -233,11 +250,12 @@ def main():
     ):
         torch.manual_seed(seed)
         if f32_enabled:
-            f32_out: FloatTensor = f32_enc(
-                input_ids=input_ids,
-                input_mask=mask,
-            )
-            assert f32_out.isfinite().all(), 'f32_out has non-finite values'
+            with autocast(device_type=device.type, dtype=torch.float16) if do_autocast else nullcontext():
+                f32_out: FloatTensor = f32_enc(
+                    input_ids=input_ids,
+                    input_mask=mask,
+                )
+                assert f32_out.isfinite().all(), 'f32_out has non-finite values'
         if bf16_enabled:
             bf16_out: FloatTensor = bf16_enc(
                 input_ids=input_ids,

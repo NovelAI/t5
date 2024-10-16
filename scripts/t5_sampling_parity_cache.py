@@ -59,8 +59,6 @@ def main():
     input_encoding: BatchEncoding = hf_tokenizer(
         "Today is a fine <extra_id_0> on which to walk my <extra_id_1> in the park.",
         return_tensors=TensorType.PYTORCH,
-        # for some reason, ending the input with </s> results in a saner answer on t5 small.
-        # t5 large is fine without </s>; we should generally prefer False, but it's nice to debug on small
         add_special_tokens=True,
     ).to(device)
     label_encoding: BatchEncoding = hf_tokenizer(
@@ -89,7 +87,7 @@ def main():
         streamer: TokenStreamer = streamer_factory()
         stopping_criteria = StoppingCriteriaList([StopOnToken(set((mask2, hf_t5.config.eos_token_id)))])
 
-        with inference_mode(), autocast(device_type=device.type, dtype=torch.float16):
+        with inference_mode(), autocast(device_type=device.type, dtype=torch.bfloat16):
             # seed the random, so that we can parity-test things like dropout (if enabled)
             torch.manual_seed(seed)
             generate_out: LongTensor = hf_t5.generate(
@@ -117,7 +115,7 @@ def main():
     ####
     torch.manual_seed(seed)
 
-    with inference_mode(), autocast(device_type=device.type, dtype=torch.float16):
+    with inference_mode(), autocast(device_type=device.type, dtype=torch.bfloat16):
         encoding: FloatTensor = my_t5.encoder(input_ids, input_mask=input_ids_mask.bool())
         cross_kv: FloatTensor = my_t5.decoder.get_cross_kv(encoding)
 

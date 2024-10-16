@@ -59,8 +59,6 @@ def main():
     input_encoding: BatchEncoding = hf_tokenizer(
         "Today is a fine <extra_id_0> on which to walk my <extra_id_1> in the park.",
         return_tensors=TensorType.PYTORCH,
-        # for some reason, ending the input with </s> results in a saner answer on t5 small.
-        # t5 large is fine without </s>; we should generally prefer False, but it's nice to debug on small
         add_special_tokens=True,
     ).to(device)
     label_encoding: BatchEncoding = hf_tokenizer(

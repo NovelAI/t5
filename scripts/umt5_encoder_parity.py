@@ -2,20 +2,20 @@ from typing import Dict, OrderedDict
 
 import torch
 from torch import FloatTensor, Tensor, inference_mode
-from torch.nn import Module
 from torch.amp import autocast
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from transformers.modeling_outputs import BaseModelOutputWithPastAndCrossAttentions
-from transformers.models.t5 import T5EncoderModel as HFT5EncoderModel
-from transformers.models.t5 import T5TokenizerFast
-from transformers.models.t5.configuration_t5 import T5Config as T5ConfigHF
+from transformers.models.umt5 import UMT5EncoderModel as UMT5EncoderHF
+from transformers.models.umt5.configuration_umt5 import UMT5Config as UMT5ConfigHF
+from transformers import LlamaTokenizerFast
 from transformers.tokenization_utils_base import BatchEncoding
 from enum import Enum
 from contextlib import nullcontext
 
 from nai_t5 import T5Config, T5EncoderStack
 from nai_t5.t5_hf import (
-    hf_to_based_t5_enc_state,
     to_based_config,
+    hf_to_based_t5_enc_state,
     replace_gates,
     replace_norms,
 )
@@ -41,11 +41,10 @@ class PrecisionMode(str, Enum):
 def main():
     device = torch.device("cuda")
 
-    # hf_model_name = "google/t5-v1_1-small"
-    hf_model_name = "google/t5-v1_1-xl"
-
-    hf_config: T5ConfigHF = T5ConfigHF.from_pretrained(hf_model_name)
-    hf_tokenizer: T5TokenizerFast = T5TokenizerFast.from_pretrained(hf_model_name, legacy=False)
+    hf_model_name = "EleutherAI/pile-t5-base"
+    hf_config: UMT5ConfigHF = UMT5ConfigHF.from_pretrained(hf_model_name)
+    hf_tokenizer: LlamaTokenizerFast = LlamaTokenizerFast.from_pretrained(hf_model_name)
+    hf_tokenizer.pad_token = hf_tokenizer.unk_token
 
     # precision_mode = PrecisionMode.Float32
     # precision_mode = PrecisionMode.MixedBF16
@@ -58,7 +57,7 @@ def main():
         case _:
             raise ValueError(f"Invalid precision mode: {precision_mode}")
     
-    hf_encoder = HFT5EncoderModel.from_pretrained(hf_model_name, **hf_dtype_kwargs).eval()
+    hf_encoder: UMT5EncoderHF = UMT5EncoderHF.from_pretrained(hf_model_name, **hf_dtype_kwargs).eval()
 
     my_config: T5Config = to_based_config(hf_config, n_tokens=hf_tokenizer.model_max_length)
     if precision_mode == PrecisionMode.PureBF16:
@@ -74,7 +73,10 @@ def main():
     converted_enc_state: Dict[str, Tensor] = hf_to_based_t5_enc_state(hf_state, my_config)
     my_encoder.load_state_dict(converted_enc_state)
 
-    # make HF's norms and gates match ours, so that we're only comparing "everything else" (we already know our norms and gates are subtly different)
+    # NOTE: we are CHANGING the HF implementation!!
+    # use torch built-in RMSNorm and GELU.
+    # these are subtly but acceptably different; eliminate them as a confounding factor
+    # so that we can measure parity of *everything else*
     replace_norms(hf_encoder)
     replace_gates(hf_encoder)
 
@@ -90,7 +92,11 @@ def main():
             raise ValueError(f"Invalid precision mode: {precision_mode}")
 
     seed = 42
-    with inference_mode(), autocast_ctx:
+    with (
+        inference_mode(),
+        autocast_ctx,
+        sdpa_kernel(SDPBackend.MATH),
+    ):
         # seed the random, so that we can parity-test things like dropout (if enabled)
         torch.manual_seed(seed)
         hf_enc_out: BaseModelOutputWithPastAndCrossAttentions = hf_encoder(
@@ -107,13 +113,14 @@ def main():
             input_ids=tokens.input_ids,
             input_mask=tokens.attention_mask.bool(),
         )
-    compare_dtype = torch.promote_types(my_encoder_out.dtype, hf_enc_out["last_hidden_state"].dtype)
-    hf_cast: FloatTensor = hf_enc_out["last_hidden_state"].type(compare_dtype)
+    compare_dtype = torch.promote_types(my_encoder_out.dtype, hf_enc_out.last_hidden_state.dtype)
+    hf_cast: FloatTensor = hf_enc_out.last_hidden_state.type(compare_dtype)
     my_cast: FloatTensor = my_encoder_out.type(compare_dtype)
     diff = hf_cast.float().sub(my_cast.float())
-    rdiff = torch.maximum(hf_cast, my_cast).float().div(torch.minimum(hf_cast, my_cast).float()).nan_to_num()
+    qs = torch.tensor([.5, .75, .9, .95, .99, .999, .9999], device=device)
+    q = diff.abs().quantile(qs)
+    print(f'quantiles ({qs.cpu()}):\n           {q.cpu()}')
     stat(diff, 'diff')
-    stat(rdiff, 'rdiff')
     assert hf_cast.allclose(my_cast), "HF and NAI outputs do not match"
     pass  # somewhere to put your breakpoint
 

@@ -1,10 +1,12 @@
-from typing import Dict, OrderedDict
+from typing import OrderedDict
 
 import torch
 from torch import FloatTensor, Tensor, inference_mode
 from torch.amp import autocast
-from transformers.models.t5 import T5ForConditionalGeneration, T5TokenizerFast
-from transformers.models.t5.configuration_t5 import T5Config as T5ConfigHF
+from transformers.modeling_outputs import Seq2SeqLMOutput
+from transformers.models.umt5 import UMT5ForConditionalGeneration
+from transformers.models.umt5.configuration_umt5 import UMT5Config as UMT5ConfigHF
+from transformers import LlamaTokenizerFast
 from transformers.tokenization_utils_base import BatchEncoding, TruncationStrategy
 from transformers.utils.generic import PaddingStrategy, TensorType
 from torch.nn.attention import SDPBackend, sdpa_kernel
@@ -22,13 +24,25 @@ from nai_t5.t5_hf import (
     replace_norms,
 )
 
+from torch import Tensor
+from typing import Optional
+from torch.linalg import matrix_norm
+def fmt_matrix_norm(t: Tensor) -> str:
+    t = t.squeeze().cpu()
+    if t.numel() == 1:
+        return f'{t.item():.2f}'
+    return str(t)
+def stat(t: Tensor, label: Optional[str] = None) -> None:
+    print(tuple(t.shape), str(t.dtype).removeprefix('torch.'), f'σ={t.std().item():g}', f'μ={t.mean().item():.2f}', f'norm={fmt_matrix_norm(matrix_norm(t.float(), ord=2))}', f'absmax={t.abs().max().item():g}', label or '')
+
 
 def main():
     device = torch.device("cuda")
-    hf_model_name = "google/t5-v1_1-small"
-    hf_config: T5ConfigHF = T5ConfigHF.from_pretrained(hf_model_name)
-    hf_tokenizer: T5TokenizerFast = T5TokenizerFast.from_pretrained(hf_model_name, legacy=False)
-    hf_t5 = T5ForConditionalGeneration.from_pretrained(hf_model_name).eval()
+    hf_model_name = "EleutherAI/pile-t5-base"
+    hf_config: UMT5ConfigHF = UMT5ConfigHF.from_pretrained(hf_model_name)
+    hf_tokenizer: LlamaTokenizerFast = LlamaTokenizerFast.from_pretrained(hf_model_name)
+    hf_tokenizer.pad_token = hf_tokenizer.unk_token
+    hf_t5: UMT5ForConditionalGeneration = UMT5ForConditionalGeneration.from_pretrained(hf_model_name).eval().to(device)
 
     my_config: T5Config = to_based_config(hf_config, n_tokens=hf_tokenizer.model_max_length)
     my_t5 = T5(my_config).eval()
@@ -61,12 +75,12 @@ def main():
     decoder_mask = label_mask_to_decoder_mask(labels_mask)
 
     hf_state: OrderedDict[str, Tensor] = hf_t5.state_dict()
-    converted_enc_state: Dict[str, Tensor] = hf_to_based_t5_state(hf_state, my_config)
-    my_t5.load_state_dict(converted_enc_state)
+    converted_state: dict[str, Tensor] = hf_to_based_t5_state(hf_state, my_config)
+    my_t5.load_state_dict(converted_state)
 
     # NOTE: we are CHANGING the HF implementation!!
     # use torch built-in RMSNorm and GELU.
-    # these are subtlely but acceptably different; eliminate them as a confounding factor
+    # these are subtly but acceptably different; eliminate them as a confounding factor
     # so that we can measure parity of *everything else*
     replace_gates(hf_t5)
     replace_norms(hf_t5)
@@ -82,7 +96,7 @@ def main():
     ):
         # seed the random, so that we can parity-test things like dropout (if enabled)
         torch.manual_seed(seed)
-        hf_out = hf_t5.forward(
+        hf_out: Seq2SeqLMOutput = hf_t5(
             input_ids=input_ids,
             attention_mask=input_ids_mask,
             decoder_input_ids=decoder_input_ids,
@@ -100,14 +114,23 @@ def main():
             output_hidden_states=None,
             return_dict=None,
         )
+        hf_logits: FloatTensor = hf_out.logits
         torch.manual_seed(seed)
-        my_out: FloatTensor = my_t5.forward(
+        my_logits: FloatTensor = my_t5(
             encoder_input_ids=input_ids,
             decoder_input_ids=decoder_input_ids,
             encoder_input_mask=input_ids_mask.bool(),
             decoder_input_mask=decoder_mask.bool(),
         )
-        assert hf_out.logits.allclose(my_out), "HF and NAI logits do not match"
+    compare_dtype = torch.promote_types(my_logits.dtype, hf_logits.dtype)
+    hf_cast: FloatTensor = hf_logits.type(compare_dtype)
+    my_cast: FloatTensor = my_logits.type(compare_dtype)
+    diff = hf_cast.float().sub(my_cast.float())
+    qs = torch.tensor([.5, .75, .9, .95, .99, .999, .9999], device=device)
+    q = diff.abs().quantile(qs)
+    print(f'quantiles ({qs.cpu()}):\n           {q.cpu()}')
+    stat(diff, 'diff')
+    assert hf_cast.allclose(my_cast), "HF and NAI logits do not match"
     pass  # somewhere to put your breakpoint
 
 

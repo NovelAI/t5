@@ -8,7 +8,7 @@ from torch.nn import Linear
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.functional import scaled_dot_product_attention
 
-from .t5_common import RMSNorm_f32, T5GEGLUFFN, T5Config, T5RelativeAttentionBias, T5ReLUFFN, flash_attention_flops, get_ffn_factory
+from .t5_common import RMSNormCast, T5GEGLUFFN, T5Config, T5RelativeAttentionBias, T5ReLUFFN, flash_attention_flops, get_ffn_factory
 
 ####
 #### T5 decoder cross-attention
@@ -22,7 +22,6 @@ class T5CrossAttention(nn.Module):
     head_dim: int
     scale: float
     dropout: float
-    use_math_attn: bool
     config: T5Config
 
     def __init__(self, config: T5Config) -> None:
@@ -30,25 +29,24 @@ class T5CrossAttention(nn.Module):
         assert config.n_head == config.kv_heads, "Q and KV heads must be equal; GQA not implemented yet."
         self.head_dim = config.head_dim
         self.scale = self.head_dim**-0.5 if config.scale_qk else 1.0
-        self.use_math_attn = config.use_math_attn
         self.dropout = config.dropout
         self.q_proj = Linear(
             in_features=config.hidden_dim,
             out_features=config.head_dim * config.n_head,
             bias=False,
-            dtype=config.dtype,
+            dtype=config.linear_weight_dtype,
         )
         self.kv_proj = Linear(
             in_features=config.hidden_dim,
             out_features=config.head_dim * config.kv_heads * 2,
             bias=False,
-            dtype=config.dtype,
+            dtype=config.linear_weight_dtype,
         )
         self.o_proj = Linear(
             in_features=config.head_dim * config.n_head,
             out_features=config.hidden_dim,
             bias=False,
-            dtype=config.dtype,
+            dtype=config.linear_weight_dtype,
         )
         self.config = config
 
@@ -71,24 +69,14 @@ class T5CrossAttention(nn.Module):
         # TODO: if training, then learn scales for Q and K as a proxy for learning rate
         if mask is not None:
             assert mask.ndim == 4, "Expected [batch, heads, q, k] attention mask"
-        # use math attn for HF parity instead of performance
-        with sdpa_kernel(
-            [SDPBackend.MATH]
-            if self.use_math_attn
-            else [
-                SDPBackend.CUDNN_ATTENTION,
-                SDPBackend.FLASH_ATTENTION,
-                SDPBackend.EFFICIENT_ATTENTION,
-            ]
-        ):
-            a = scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                attn_mask=mask,
-                dropout_p=self.dropout if self.training else 0.0,
-                scale=self.scale,
-            )
+        a = scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=mask,
+            dropout_p=self.dropout if self.training else 0.0,
+            scale=self.scale,
+        )
         a = rearrange(a, "batch heads seq head_dim -> batch seq (heads head_dim)")
         o = self.o_proj(a)
         return o
@@ -110,7 +98,6 @@ class T5DecoderSelfAttention(nn.Module):
     head_dim: int
     scale: float
     dropout: float
-    use_math_attn: bool
     config: T5Config
 
     def __init__(self, config: T5Config) -> None:
@@ -119,19 +106,18 @@ class T5DecoderSelfAttention(nn.Module):
         self.head_dim = config.head_dim
         qkv_heads: int = config.n_head + config.kv_heads * 2
         self.scale = self.head_dim**-0.5 if config.scale_qk else 1.0
-        self.use_math_attn = config.use_math_attn
         self.dropout = config.dropout
         self.qkv_proj = Linear(
             in_features=config.hidden_dim,
             out_features=config.head_dim * qkv_heads,
             bias=False,
-            dtype=config.dtype,
+            dtype=config.linear_weight_dtype,
         )
         self.o_proj = Linear(
             in_features=config.head_dim * config.n_head,
             out_features=config.hidden_dim,
             bias=False,
-            dtype=config.dtype,
+            dtype=config.linear_weight_dtype,
         )
         self.config = config
 
@@ -145,6 +131,7 @@ class T5DecoderSelfAttention(nn.Module):
         q, k, v = rearrange(
             qkv, "batch seq (proj heads head_dim) -> proj batch heads seq head_dim", proj=3, head_dim=self.head_dim
         ).unbind()
+        bias = bias.type_as(q)
 
         if past_kv is not None:
             kv_in, kv_out = past_kv.split((past_kv.size(-2) - 1, 1), dim=-2)
@@ -158,32 +145,23 @@ class T5DecoderSelfAttention(nn.Module):
             v = torch.cat([past_v, v], dim=-2)
 
         # TODO: if training, then learn scales for Q and K as a proxy for learning rate
-        with sdpa_kernel(
-            [SDPBackend.MATH]
-            if self.use_math_attn
-            else [
-                SDPBackend.CUDNN_ATTENTION,
-                SDPBackend.FLASH_ATTENTION,
-                SDPBackend.EFFICIENT_ATTENTION,
-            ]
-        ):
-            # NOTE: this _is_ a causal attention but we are not able to enable is_causal optimization because
-            #       we are passing an arbitrary bias (T5 achieves relative position embedding via a learned bias)
-            # NOTE: when kv-cache is in use (i.e. autoregressive inference), the diagonal of the mask ceases
-            #       to be default, and instead becomes k_len_total-q_len
-            # TODO: torch 2.4.0 FlexAttention could enable a simpler way to express the bias (and/or the causal mask
-            #       with which it's modulated). moreover it would enable us to not pay the cost of materializing said mask.
-            # TODO: torch nightly/2.5.0 FlexAttention enables blockwise sparsity over arbitrary masks, so could
-            #       enable us to speed up this causal attention
-            a = scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                # fused kernel requires last dimension of input to have stride 1.
-                attn_mask=bias,  # .contiguous(),
-                dropout_p=self.dropout if self.training else 0.0,
-                scale=self.scale,
-            )
+        # NOTE: this _is_ a causal attention but we are not able to enable is_causal optimization because
+        #       we are passing an arbitrary bias (T5 achieves relative position embedding via a learned bias)
+        # NOTE: when kv-cache is in use (i.e. autoregressive inference), the diagonal of the mask ceases
+        #       to be default, and instead becomes k_len_total-q_len
+        # TODO: torch 2.4.0 FlexAttention could enable a simpler way to express the bias (and/or the causal mask
+        #       with which it's modulated). moreover it would enable us to not pay the cost of materializing said mask.
+        # TODO: torch nightly/2.5.0 FlexAttention enables blockwise sparsity over arbitrary masks, so could
+        #       enable us to speed up this causal attention
+        a = scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            # fused kernel requires last dimension of input to have stride 1.
+            attn_mask=bias,  # .contiguous(),
+            dropout_p=self.dropout if self.training else 0.0,
+            scale=self.scale,
+        )
         a = rearrange(a, "batch heads seq head_dim -> batch seq (heads head_dim)")
         o = self.o_proj(a)
         return o
@@ -201,11 +179,11 @@ class T5DecoderSelfAttention(nn.Module):
 class T5DecoderLayer(nn.Module):
     self_attn: T5DecoderSelfAttention
     cross_attn: T5CrossAttention
-    ln1: RMSNorm_f32
+    ln1: RMSNormCast
     """pre-attn layer norm"""
-    ln2: RMSNorm_f32
+    ln2: RMSNormCast
     """pre-xattn layer norm"""
-    ln3: RMSNorm_f32
+    ln3: RMSNormCast
     """post-attn layer norm"""
     ffn: T5ReLUFFN | T5GEGLUFFN
     dropout: nn.Dropout
@@ -215,10 +193,9 @@ class T5DecoderLayer(nn.Module):
         self.self_attn = T5DecoderSelfAttention(config=config)
         self.cross_attn = T5CrossAttention(config=config)
         ffn_factory = get_ffn_factory(config.ffn_type)
-        device = torch.get_default_device()
-        self.ln1 = RMSNorm_f32(config.hidden_dim, eps=config.eps, device=device)
-        self.ln2 = RMSNorm_f32(config.hidden_dim, eps=config.eps, device=device)
-        self.ln3 = RMSNorm_f32(config.hidden_dim, eps=config.eps, device=device)
+        self.ln1 = RMSNormCast(config.hidden_dim, eps=config.eps, dtype=config.norm_weight_dtype)
+        self.ln2 = RMSNormCast(config.hidden_dim, eps=config.eps, dtype=config.norm_weight_dtype)
+        self.ln3 = RMSNormCast(config.hidden_dim, eps=config.eps, dtype=config.norm_weight_dtype)
         self.ffn = ffn_factory(config)
         self.dropout = nn.Dropout(config.dropout)
 
@@ -267,7 +244,7 @@ class T5DecoderStack(nn.Module):
     relative_attention_bias: T5RelativeAttentionBias
     dropout: nn.Dropout
     layers: nn.ModuleList
-    ln: RMSNorm_f32
+    ln: RMSNormCast
     param_count: int
     non_emb_param_count: int
 
@@ -276,9 +253,8 @@ class T5DecoderStack(nn.Module):
         self.config = config
         self.relative_attention_bias = T5RelativeAttentionBias(config, bidirectional=False)
         self.dropout = nn.Dropout(config.dropout)
-        device = torch.get_default_device()
         self.layers = nn.ModuleList([T5DecoderLayer(config) for _ in range(config.num_layers)])
-        self.ln = RMSNorm_f32(config.hidden_dim, eps=config.eps, device=device)
+        self.ln = RMSNormCast(config.hidden_dim, eps=config.eps, dtype=config.norm_weight_dtype)
         # we must calculate this at init, and not later, because FSDP may shard the params
         self.param_count = emb_param_count = 0
         for p in self.parameters():
@@ -316,9 +292,9 @@ class T5DecoderStack(nn.Module):
                     assert (
                         input_mask.shape == inputs_shape
                     ), f"attn mask was 2-dim, so expected padding mask: (batch, seq_len). got {input_mask.shape} mask for {inputs_shape} inputs."
-                    # broadcast over all heads and keys (b h q k)
-                    self_mask = rearrange(input_mask, "b q -> b 1 q 1")
-                    self_mask = self_mask.repeat_interleave(k_len_self_total, dim=-1)
+                    # broadcast over all heads and queries (b h q k)
+                    self_mask = rearrange(input_mask, "b k -> b 1 1 k")
+                    self_mask = self_mask.repeat_interleave(k_len_self_total, dim=-2)
                     self_mask.tril_(k_len_self_total - q_len)
                 case 3:
                     assert input_mask.shape == torch.Size(
@@ -331,6 +307,9 @@ class T5DecoderStack(nn.Module):
                     raise ValueError(
                         f"Expected 2 or 3-dim input mask, got mask {input_mask.shape} for {inputs_shape} inputs."
                     )
+            if self.config.pos_emb_per_layer:
+                # broadcast over all layers
+                self_mask.unsqueeze_(0)
             self_attn_bias: FloatTensor = self_position_bias.where(self_mask, -10000)
         else:
             assert (
@@ -358,18 +337,23 @@ class T5DecoderStack(nn.Module):
             cross_mask = rearrange(cross_mask, "b q k -> b 1 q k")
 
         x: FloatTensor = self.dropout(input_embeds)
+
+        # UMT5 has a position embedding per layer, and we computed all of them simultaneously
+        # note: [e]*n does not duplicate tensors, it just makes a list of n references to the same tensor
+        self_biases: list[FloatTensor] = self_attn_bias.unbind() if self.config.pos_emb_per_layer else [self_attn_bias]*self.config.num_layers
+
         layer_self_kvs: List[Optional[FloatTensor]] = (
             [None] * len(self.layers) if self_past_kv is None else self_past_kv.unbind()
         )
         layer_cross_kvs: List[Optional[FloatTensor]] = (
             [None] * len(self.layers) if cross_kv is None else cross_kv.unbind()
         )
-        for layer, layer_self_kv, layer_cross_kv in zip(self.layers, layer_self_kvs, layer_cross_kvs):
+        for layer, layer_self_kv, layer_cross_kv, self_bias in zip(self.layers, layer_self_kvs, layer_cross_kvs, self_biases):
             assert isinstance(layer, T5DecoderLayer)
             x: FloatTensor = layer(
                 x,
                 encoding,
-                self_attn_bias=self_attn_bias,
+                self_attn_bias=self_bias,
                 cross_attn_mask=cross_mask,
                 self_past_kv=layer_self_kv,
                 cross_kv=layer_cross_kv,

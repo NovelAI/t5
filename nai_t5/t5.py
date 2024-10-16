@@ -103,7 +103,7 @@ class T5(nn.Module):
             in_features=config.hidden_dim,
             out_features=config.vocab_size,
             bias=False,
-            dtype=config.dtype,
+            dtype=config.linear_weight_dtype,
         )
         self.lm_head_param_count = self.config.hidden_dim * self.config.vocab_size
         self.param_count = self.lm_head_param_count + self.encoder.param_count + self.decoder.param_count

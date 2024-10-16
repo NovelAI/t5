@@ -15,7 +15,6 @@ from .t5_common import (
     T5Config,
     T5RelativeAttentionBias,
     T5ReLUFFN,
-    clamp_inf_if_float16,
     flash_attention_flops,
     get_ffn_factory,
 )
@@ -69,7 +68,7 @@ class T5EncoderSelfAttention(nn.Module):
         # TODO: if training, then learn scales for Q and K as a proxy for learning rate
         if mask is not None:
             assert mask.ndim == 4, "Expected [batch, heads, q, k] attention mask"
-            position_bias = position_bias.where(mask, -1e5)
+            position_bias = position_bias.where(mask, -1e4)
         # use math attn for HF parity instead of performance
         with sdpa_kernel(
             [SDPBackend.MATH]
@@ -133,13 +132,12 @@ class T5EncoderLayer(nn.Module):
         attn_out: FloatTensor = self.attn(x, position_bias=position_bias, mask=attn_mask)
 
         x = residual + self.dropout(attn_out)
-        x = clamp_inf_if_float16(x)
 
         residual = x
-        x = self.ffn(self.ln2(x))
+        # NOTE for float16: the FFN is forced to output a float32 tensor
+        x = self.ffn(self.ln2(x)) # FFN output (1, 3, 512) bfloat16 σ=8.25 μ=0.523438 norm=279.1878967285156 
 
-        x = residual + self.dropout(x)
-        x = clamp_inf_if_float16(x)
+        x = residual + self.dropout(x) # (1, 3, 512) float32 σ=17.5739 μ=1.05463 norm=516.37451171875
 
         return x
 

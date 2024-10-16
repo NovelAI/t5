@@ -64,7 +64,7 @@ def main():
     stopping_criteria = StoppingCriteriaList([StopOnToken(set((mask2, hf_t5.config.eos_token_id)))])
 
     seed = 42
-    with inference_mode(), autocast(device_type=device.type, dtype=torch.bfloat16):
+    with inference_mode(), autocast(device_type=device.type, dtype=torch.float16):
         # seed the random, so that we can parity-test things like dropout (if enabled)
         torch.manual_seed(seed)
         # Rest of your code...

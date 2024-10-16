@@ -17,6 +17,15 @@ from nai_t5 import (
 )
 from nai_t5 import T5
 
+from torch.nn import Module
+from functools import partial
+
+
+from torch import Tensor
+from typing import Optional
+from torch.linalg import matrix_norm
+def stat(t: Tensor, label: Optional[str] = None) -> None:
+    print(tuple(t.shape), str(t.dtype).removeprefix('torch.'), f'σ={t.std().item():g}', f'μ={t.mean().item():g}', f'norm={matrix_norm(t.float(), ord=2).squeeze().cpu()}', label or '')
 
 def main():
     device = torch.device("cuda")
@@ -62,6 +71,64 @@ def main():
     my_t5.to(device)
     hf_t5.to(device)
 
+    def scrutinize_input(module: torch.nn.Module, input, name: str):
+        if isinstance(input, (tuple, list)):
+            for elem in input:
+                scrutinize_input(module, elem, name)
+        elif isinstance(input, dict):
+            for elem in input.values():
+                scrutinize_input(module, elem, name)
+        elif torch.is_tensor(input):
+            assert input.isfinite().all().item(), f"{module.__class__.__name__} {name}: non-finite input encountered"
+    def scrutinize_output(module: torch.nn.Module, output, name: str):
+        if isinstance(output, (tuple, list)):
+            for elem in output:
+                scrutinize_output(module, elem, name)
+        elif isinstance(output, dict):
+            for elem in output.values():
+                scrutinize_output(module, elem, name)
+        elif torch.is_tensor(output):
+            assert output.isfinite().all().item(), f"{module.__class__.__name__} {name}: non-finite output encountered"
+
+    def hook(module: Module, input, output, name: str):
+        scrutinize_input(module, input, name)
+        scrutinize_output(module, output, name)
+    for name, mod in hf_t5.named_modules():
+        mod.register_forward_hook(partial(hook, name=f'hf/{name}'))
+    for name, mod in my_t5.named_modules():
+        mod.register_forward_hook(partial(hook, name=f'my/{name}'))
+
+    def replace_norms(mod: Module) -> None:
+        from transformers.models.t5.modeling_t5 import T5LayerNorm
+        from nai_t5.t5_common import RMSNorm_f32
+        for child_name, child_mod in mod.named_children():
+            # print(child_name, child_mod.__class__.__name__)
+            if isinstance(child_mod, T5LayerNorm):
+                # if mod.__class__.__module__.startswith('apex')
+                norm = RMSNorm_f32(
+                    child_mod.normalized_shape,
+                    eps=child_mod.eps,
+                    elementwise_affine=child_mod.elementwise_affine,
+                    device=child_mod.weight.device,
+                )
+                with inference_mode():
+                    norm.weight.copy_(child_mod.weight)
+                setattr(mod, child_name, norm)
+            else:
+                replace_norms(child_mod)
+    replace_norms(hf_t5)
+
+    def replace_gates(mod: Module) -> None:
+        from transformers.activations import NewGELUActivation
+        from torch.nn import GELU
+        for child_name, child_mod in mod.named_children():
+            if isinstance(child_mod, NewGELUActivation):
+                gelu = GELU(approximate='tanh')
+                setattr(mod, child_name, gelu)
+            else:
+                replace_gates(child_mod)
+    replace_gates(hf_t5)
+
     seed = 42
     with inference_mode(), autocast(device_type=device.type, dtype=torch.bfloat16):
         # seed the random, so that we can parity-test things like dropout (if enabled)
@@ -91,7 +158,11 @@ def main():
             encoder_input_mask=input_ids_mask.bool(),
             decoder_input_mask=decoder_mask.bool(),
         )
-        assert hf_out.logits.allclose(my_out, atol=0.5), "HF and NAI logits do not match"
+        diff = hf_out.logits-my_out
+        stat(diff)
+        print('absmax:', f'{diff.abs().max().item()}:g')
+        # assert hf_out.logits.allclose(my_out, atol=0.5), "HF and NAI logits do not match"
+        assert hf_out.logits.allclose(my_out), "HF and NAI logits do not match"
     pass  # somewhere to put your breakpoint
 
 

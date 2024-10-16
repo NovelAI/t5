@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Dict, Any
 import torch
 from torch import Tensor, cat
 
-from .t5_common import T5Config, T5FFNType
+from .t5_common import T5Config, T5FFNType, GELUApprox
 
 ####
 #### Construction of T5 config from HF config
@@ -29,12 +29,13 @@ def to_based_config(hf_config: T5ConfigHF, n_tokens=512, device=torch.device("cp
         dtype=torch.float32,
         # dtype="float32",
         ffn_type=T5FFNType.ReLU if hf_config.dense_act_fn == "relu" else T5FFNType.GEGLU,
+        gelu_approx=GELUApprox.Tanh,
         relative_attention_max_distance=hf_config.relative_attention_max_distance,
         relative_attention_num_buckets=hf_config.relative_attention_num_buckets,
         # scale_qk disabled because importing Google weights
         scale_qk=False,
         # math attn gives closer HF parity, but we still get the right tokens with mem-eff kernels
-        use_math_attn=False,
+        use_math_attn=True,
         pad_token_id=hf_config.pad_token_id,
         decoder_start_token_id=hf_config.pad_token_id,
         label_ignore_index=-100,

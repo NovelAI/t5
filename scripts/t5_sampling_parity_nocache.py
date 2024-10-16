@@ -89,7 +89,7 @@ def main():
         streamer: TokenStreamer = streamer_factory()
         stopping_criteria = StoppingCriteriaList([StopOnToken(set((mask2, hf_t5.config.eos_token_id)))])
 
-        with inference_mode(), autocast(device_type=device.type, dtype=torch.bfloat16):
+        with inference_mode(), autocast(device_type=device.type, dtype=torch.float16):
             # seed the random, so that we can parity-test things like dropout (if enabled)
             torch.manual_seed(seed)
             generate_out: LongTensor = hf_t5.generate(
@@ -119,7 +119,7 @@ def main():
 
     batch_size = 1
     use_based = True
-    with inference_mode(), autocast(device_type=device.type, dtype=torch.bfloat16):
+    with inference_mode(), autocast(device_type=device.type, dtype=torch.float16):
         if use_based:
             encoding: FloatTensor = my_t5.encoder(input_ids, input_mask=input_ids_mask.bool())
 
@@ -134,7 +134,7 @@ def main():
             ).last_hidden_state
 
     def decode(in_tokens: LongTensor, encoding: FloatTensor, input_ids_mask: BoolTensor) -> FloatTensor:
-        with inference_mode(), autocast(device_type=device.type, dtype=torch.bfloat16):
+        with inference_mode(), autocast(device_type=device.type, dtype=torch.float16):
             if use_based:
                 decoder_input_embeds: FloatTensor = my_t5.encoder.vocab_embed(in_tokens)
                 input_mask: BoolTensor = decoder_input_mask[:, : in_tokens.size(-1)]

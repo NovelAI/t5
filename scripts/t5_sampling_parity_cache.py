@@ -16,6 +16,16 @@ from transformers.utils.generic import TensorType
 from nai_t5 import T5, T5Config, hf_to_based_t5_state, to_based_config
 from nai_t5.sampling import BoundCachedDecode, MakeLogitGenerator, generate_greedy_cached, generate_until
 
+from torch.nn import Module
+from functools import partial
+
+
+from torch import Tensor
+from typing import Optional
+from torch.linalg import matrix_norm
+def stat(t: Tensor, label: Optional[str] = None) -> None:
+    print(tuple(t.shape), str(t.dtype).removeprefix('torch.'), f'σ={t.std().item():g}', f'μ={t.mean().item():g}', f'norm={matrix_norm(t.float(), ord=2).squeeze().cpu()}', label or '')
+
 
 @dataclass
 class StopOnToken(StoppingCriteria):
@@ -78,6 +88,64 @@ def main():
     my_t5.load_state_dict(converted_enc_state)
     my_t5.to(device)
 
+    def scrutinize_input(module: torch.nn.Module, input, name: str):
+        if isinstance(input, (tuple, list)):
+            for elem in input:
+                scrutinize_input(module, elem, name)
+        elif isinstance(input, dict):
+            for elem in input.values():
+                scrutinize_input(module, elem, name)
+        elif torch.is_tensor(input):
+            assert input.isfinite().all().item(), f"{module.__class__.__name__} {name}: non-finite input encountered"
+    def scrutinize_output(module: torch.nn.Module, output, name: str):
+        if isinstance(output, (tuple, list)):
+            for elem in output:
+                scrutinize_output(module, elem, name)
+        elif isinstance(output, dict):
+            for elem in output.values():
+                scrutinize_output(module, elem, name)
+        elif torch.is_tensor(output):
+            assert output.isfinite().all().item(), f"{module.__class__.__name__} {name}: non-finite output encountered"
+
+    def hook(module: Module, input, output, name: str):
+        scrutinize_input(module, input, name)
+        scrutinize_output(module, output, name)
+    for name, mod in hf_t5.named_modules():
+        mod.register_forward_hook(partial(hook, name=f'hf/{name}'))
+    for name, mod in my_t5.named_modules():
+        mod.register_forward_hook(partial(hook, name=f'my/{name}'))
+
+    def replace_norms(mod: Module) -> None:
+        from transformers.models.t5.modeling_t5 import T5LayerNorm
+        from nai_t5.t5_common import RMSNorm_f32
+        for child_name, child_mod in mod.named_children():
+            # print(child_name, child_mod.__class__.__name__)
+            if isinstance(child_mod, T5LayerNorm):
+                # if mod.__class__.__module__.startswith('apex')
+                norm = RMSNorm_f32(
+                    child_mod.normalized_shape,
+                    eps=child_mod.eps,
+                    elementwise_affine=child_mod.elementwise_affine,
+                    device=child_mod.weight.device,
+                )
+                with inference_mode():
+                    norm.weight.copy_(child_mod.weight)
+                setattr(mod, child_name, norm)
+            else:
+                replace_norms(child_mod)
+    replace_norms(hf_t5)
+
+    def replace_gates(mod: Module) -> None:
+        from transformers.activations import NewGELUActivation
+        from torch.nn import GELU
+        for child_name, child_mod in mod.named_children():
+            if isinstance(child_mod, NewGELUActivation):
+                gelu = GELU(approximate='tanh')
+                setattr(mod, child_name, gelu)
+            else:
+                replace_gates(child_mod)
+    replace_gates(hf_t5)
+
     max_new_tokens = 16
     seed = 42
 
@@ -89,7 +157,7 @@ def main():
         streamer: TokenStreamer = streamer_factory()
         stopping_criteria = StoppingCriteriaList([StopOnToken(set((mask2, hf_t5.config.eos_token_id)))])
 
-        with inference_mode(), autocast(device_type=device.type, dtype=torch.float16):
+        with inference_mode(), autocast(device_type=device.type, dtype=torch.bfloat16):
             # seed the random, so that we can parity-test things like dropout (if enabled)
             torch.manual_seed(seed)
             generate_out: LongTensor = hf_t5.generate(
@@ -117,7 +185,7 @@ def main():
     ####
     torch.manual_seed(seed)
 
-    with inference_mode(), autocast(device_type=device.type, dtype=torch.float16):
+    with inference_mode(), autocast(device_type=device.type, dtype=torch.bfloat16):
         encoding: FloatTensor = my_t5.encoder(input_ids, input_mask=input_ids_mask.bool())
         cross_kv: FloatTensor = my_t5.decoder.get_cross_kv(encoding)
 

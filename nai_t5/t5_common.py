@@ -61,6 +61,10 @@ class T5FFNType(str, Enum):
     ReLU = "ReLU"
     GEGLU = "GEGLU"
 
+class GELUApprox(str, Enum):
+    None_ = "none"
+    Tanh = "tanh"
+
 
 class T5Config(BaseModel, DTypeModel):
     class Config:
@@ -77,6 +81,7 @@ class T5Config(BaseModel, DTypeModel):
     eps: float = 1e-6
     dtype: DType | torch.dtype = torch.float32
     ffn_type: T5FFNType = T5FFNType.GEGLU
+    gelu_approx: GELUApprox = GELUApprox.None_
     relative_attention_num_buckets: int = 32
     relative_attention_max_distance: int = 128
     scale_qk: bool = True
@@ -84,6 +89,7 @@ class T5Config(BaseModel, DTypeModel):
     pad_token_id: int = 0
     decoder_start_token_id: int = 0
     label_ignore_index: int = -100
+    ffn_f16scale_factor: int = 4
 
 
 ####
@@ -228,6 +234,7 @@ class T5GEGLUFFN(nn.Module):
     dropout: nn.Dropout
     ff_out: Linear
     config: T5Config
+    f16_scale_factor: float
 
     def __init__(self, config: T5Config) -> None:
         super().__init__()
@@ -246,17 +253,21 @@ class T5GEGLUFFN(nn.Module):
         self.dropout = nn.Dropout(config.dropout)
         # you can get closer HF parity with transformers.activations.NewGELUActivation,
         # but nn.GELU is faster and still predicts the same token in our testing
-        self.gate = nn.GELU()
+        self.gate = nn.GELU( ) # TODO: try tanh!
         self.config = config
+        self.f16_scale_factor = config.ffn_f16scale_factor
 
-    # TODO: torch.compile
-    def forward(self, x: FloatTensor) -> FloatTensor:
-        x = self.ff_in(x)
-        g, x = torch.chunk(x, 2, dim=-1)
-        g = self.gate(g)
+    def forward(self, x: FloatTensor) -> FloatTensor: # (1, 3, 512) float32 σ=0.0825098 μ=0.00286852 norm=2.1102089881896973
+        x = self.ff_in(x) # (1, 3, 2048) bfloat16 σ=0.890625 μ=-0.0668945 norm=44.35154724121094
+        g, x = torch.chunk(x, 2, dim=-1) # g (1, 3, 1024) bfloat16 σ=0.867188 μ=-0.113281 norm=32.091087341308594 ; x (1, 3, 1024) bfloat16 σ=0.917969 μ=-0.0206299 norm=30.982702255249023
+        if x.dtype == torch.float16:
+            x = x / self.f16_scale_factor
+        g = self.gate(g) # if you cast g to float beforehand then it'll match what HF's NewGELUActivation gets if given a float. we're both *meant* to start in half-precision though
         x = g * x
         x = self.dropout(x)
         x = self.ff_out(x)
+        if x.dtype == torch.float16:
+            x = x.float() * self.f16_scale_factor
         return x
 
     def init_weights(self):
@@ -324,26 +335,3 @@ def flash_attention_flops(
         assert not causal, "we don't know how well attention can take advantage of sparsity in causal cross-attention."
     f = 4 * batch * nheads * q_len * kv_len * headdim // (2 if causal else 1)
     return f if mode == "fwd" else (2.5 * f if mode == "bwd" else 3.5 * f)
-
-
-####
-#### Float16 clamper
-####
-
-
-f16_info = torch.finfo(torch.float16)
-f16_safermin = f16_info.min + 1000
-f16_safermax = f16_info.max - 1000
-
-# based on HF transformers' T5 float16 adaptations
-# Apache-licensed
-# https://github.com/huggingface/transformers/blob/main/LICENSE
-# credit: Suraj Patil
-# https://github.com/huggingface/transformers/pull/9487
-# credit: Prathik Rao
-# https://github.com/huggingface/transformers/pull/22097
-def clamp_inf_if_float16(x: FloatTensor) -> FloatTensor:
-    """clamp activations to give """
-    if x.dtype == torch.float16:
-        x.clamp_(x, min=f16_safermin, max=f16_safermax)
-    return x

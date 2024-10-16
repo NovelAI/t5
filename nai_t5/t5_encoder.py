@@ -69,7 +69,7 @@ class T5EncoderSelfAttention(nn.Module):
         # TODO: if training, then learn scales for Q and K as a proxy for learning rate
         if mask is not None:
             assert mask.ndim == 4, "Expected [batch, heads, q, k] attention mask"
-            position_bias = position_bias.where(mask, -1e5)
+            position_bias = position_bias.where(mask, -1e4)
         a = scaled_dot_product_attention(
             q,
             k,

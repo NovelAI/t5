@@ -258,29 +258,31 @@ def main():
     input_ids = input_ids.to(device)
     mask: BoolTensor = input_ids != tokenizer.pad_id()
 
-    qk_rebalance = 1
-    vo_rebalance = 1
-    latter_rebalances: list[float] = [4, 32]
-    ffn_rebalances: list[float] = [*[1]*(f16_config.num_layers-len(latter_rebalances)), *latter_rebalances]
-    ffn_rebalance_via_residual = False
-    print('qk_rebalance:', qk_rebalance)
-    print('vo_rebalance:', vo_rebalance)
-    print('ffn_rebalances:', ffn_rebalances)
-    print('ffn_rebalance_via_residual:', ffn_rebalance_via_residual)
+    q_smaller = 1
+    v_smaller = 1
+    latter_ffn_in_smallers: list[float] = [1/2, 1/8]
+    ffn_in_smallers: list[float] = [*[1]*(f16_config.num_layers-len(latter_ffn_in_smallers)), *latter_ffn_in_smallers]
+    latter_ffn_out_smallers: list[float] = [32, 32]
+    # ffn_out_smallers: list[float] = [*[1]*(f16_config.num_layers-len(latter_ffn_out_smallers)), *latter_ffn_out_smallers]
+    ffn_in_smaller_via_residual = False
+    print('q_smaller:', q_smaller)
+    print('v_smaller:', v_smaller)
+    print('ffn_in_smallers:', ffn_in_smallers)
+    print('ffn_in_smaller_via_residual:', ffn_in_smaller_via_residual)
     with inference_mode():
-        for layer_ix, (f16_layer, f32_layer, ffn_rebalance) in enumerate(zip(f16_enc.layers, f32_enc.layers, ffn_rebalances)):
+        for layer_ix, (f16_layer, f32_layer, ffn_in_smaller) in enumerate(zip(f16_enc.layers, f32_enc.layers, ffn_in_smallers)):
             f16_layer: T5EncoderLayer
             f32_layer: T5EncoderLayer
             q16, k16, v16 = f16_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
             q32, k32, v32 = f32_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
             o16 = f16_layer.attn.o_proj.weight
             o32 = f32_layer.attn.o_proj.weight
-            if qk_rebalance != 1:
-                q16.copy_(q32.div(qk_rebalance).type_as(q16))
-                k16.copy_(k32.mul(qk_rebalance).type_as(k16))
-            if vo_rebalance != 1:
-                v16.copy_(v32.div(vo_rebalance).type_as(v16))
-                o16.copy_(o32.mul(vo_rebalance).type_as(o16))
+            if q_smaller != 1:
+                q16.copy_(q32.div(q_smaller).type_as(q16))
+                k16.copy_(k32.mul(q_smaller).type_as(k16))
+            if v_smaller != 1:
+                v16.copy_(v32.div(v_smaller).type_as(v16))
+                o16.copy_(o32.mul(v_smaller).type_as(o16))
 
             _, ungated16 = f16_layer.ffn.ff_in.weight.chunk(2, dim=-2)
             _, ungated32 = f32_layer.ffn.ff_in.weight.chunk(2, dim=-2)
@@ -288,18 +290,18 @@ def main():
             out32 = f32_layer.ffn.ff_out.weight
             if layer_ix == 6:
                 pass
-            if ffn_rebalance != 1:
-                ungated16.copy_(ungated32.div(ffn_rebalance).type_as(ungated16))
-                if ffn_rebalance_via_residual:
-                    f16_layer.register_buffer('residual_scale', out16.new_tensor(ffn_rebalance, requires_grad=False), persistent=True)
+            if ffn_in_smaller != 1:
+                ungated16.copy_(ungated32.div(ffn_in_smaller).type_as(ungated16))
+                if ffn_in_smaller_via_residual:
+                    f16_layer.register_buffer('residual_scale', out16.new_tensor(ffn_in_smaller, requires_grad=False), persistent=True)
                     if layer_ix == f16_config.num_layers - 1:
                         next_norm: RMSNormCast = f16_enc.ln
                     else:
                         next_layer: T5EncoderLayer = f16_enc.layers[layer_ix + 1]
                         next_norm: RMSNormCast = next_layer.ln1
-                    next_norm.eps /= ffn_rebalance
+                    next_norm.eps /= ffn_in_smaller
                 else:
-                    out16.copy_(out32.mul(ffn_rebalance).type_as(out16))
+                    out16.copy_(out32.mul(ffn_in_smaller).type_as(out16))
     
     fuse_norms = True
     print('fuse_norms:', fuse_norms)

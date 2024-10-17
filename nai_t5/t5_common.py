@@ -343,7 +343,8 @@ class RMSNormCast(RMSNorm):
 
     @autocast(device_type='cuda', enabled=False)
     def forward(self, input: Tensor) -> Tensor:
-        return super().forward(input.type_as(self.weight)).type_as(input)
+        dtype = self.weight.dtype if self.elementwise_affine else torch.float32
+        return super().forward(input.type(dtype)).type_as(input)
 
 
 ####

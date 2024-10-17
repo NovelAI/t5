@@ -226,6 +226,7 @@ class T5EncoderLayer(nn.Module):
     """post-attn layer norm"""
     ffn: T5ReLUFFN | T5GEGLUFFN
     dropout: nn.Dropout
+    residual_scale: Optional[FloatTensor]
 
     def __init__(
         self,
@@ -239,6 +240,8 @@ class T5EncoderLayer(nn.Module):
         self.ln2 = RMSNormCast(config.hidden_dim, eps=config.eps, dtype=config.norm_weight_dtype)
         self.ffn = ffn_factory(config)
         self.dropout = nn.Dropout(config.dropout)
+        # TODO: expose via config somehow
+        self.register_buffer('residual_scale', None)
 
     def forward(
         self,
@@ -254,6 +257,9 @@ class T5EncoderLayer(nn.Module):
 
         residual = x
         x = self.ffn(self.ln2(x))
+
+        if self.residual_scale is not None:
+            residual = residual * self.residual_scale
 
         x = residual + self.dropout(x)
 

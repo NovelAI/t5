@@ -6,12 +6,14 @@ from contextlib import nullcontext
 
 import torch
 from torch import FloatTensor, LongTensor, BoolTensor, Tensor, inference_mode
+from torch.nn import RMSNorm
 from torch.amp.autocast_mode import autocast
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from tensorizer import TensorDeserializer
 from sentencepiece import SentencePieceProcessor
 
 from nai_t5 import T5Config, T5EncoderStack
+from nai_t5.t5_common import RMSNormCast
 from nai_t5.t5_encoder import T5EncoderLayer
 
 from torch import Tensor
@@ -76,6 +78,19 @@ def explain_diff(ref: FloatTensor, candidate: FloatTensor) -> FloatTensor:
 class NamedActivation(NamedTuple):
     name: str
     act: FloatTensor
+
+class NormAndScale(NamedTuple):
+    ln: RMSNormCast
+    scale: FloatTensor
+def extract_norm_scales(orig: RMSNorm) -> NormAndScale:
+    assert orig.elementwise_affine
+    ln = RMSNormCast(
+        normalized_shape=orig.normalized_shape,
+        eps=orig.eps,
+        elementwise_affine=False,
+        device=orig.weight.device,
+    )
+    return NormAndScale(ln, orig.weight)
 
 def main():
     device = torch.device("cuda")
@@ -262,6 +277,32 @@ def main():
                 v16.copy_(v32.div(vo_rebalance).half())
                 o16.copy_(o32.mul(vo_rebalance).half())
             break
+    
+    if fuse_norms := True:
+        with inference_mode():
+            for f16_layer, f32_layer in zip(f16_enc.layers, f32_enc.layers):
+                f16_layer: T5EncoderLayer
+                f32_layer: T5EncoderLayer
+
+                ln1, scale1 = extract_norm_scales(f32_layer.ln1)
+                setattr(f16_layer, 'ln1', ln1)
+
+                # q16, k16, v16 = f16_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
+                # q32, k32, v32 = f32_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
+                qkv_16 = f16_layer.attn.qkv_proj.weight
+                qkv_32 = f32_layer.attn.qkv_proj.weight
+
+                scale1_diag: FloatTensor = torch.eye(scale1.size(-1), device=device, dtype=scale1.dtype) * scale1.unsqueeze(-1)
+                # q16.copy_((q32 @ scale1_diag).type_as(q16))
+                qkv_16.copy_((qkv_32 @ scale1_diag).type_as(qkv_16))
+
+                # TODO: enable this later, after we work around the NaN that it introduces
+                # ln2, scale2 = extract_norm_scales(f32_layer.ln2)
+                # setattr(f16_layer, 'ln2', ln2)
+                # ff_in_16 = f16_layer.ffn.ff_in.weight
+                # ff_in_32 = f32_layer.ffn.ff_in.weight
+                # scale2_diag: FloatTensor = torch.eye(scale2.size(-1), device=device, dtype=scale2.dtype) * scale2.unsqueeze(-1)
+                # ff_in_16.copy_((ff_in_32 @ scale2_diag).type_as(ff_in_16))
 
     seed = 42
     with (

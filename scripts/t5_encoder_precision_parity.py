@@ -83,11 +83,12 @@ class NormAndScale(NamedTuple):
     ln: RMSNormCast
     scale: FloatTensor
 def extract_norm_scales(orig: RMSNorm) -> NormAndScale:
-    assert orig.elementwise_affine
+    # assert orig.elementwise_affine
     ln = RMSNormCast(
-        normalized_shape=orig.normalized_shape,
+        # normalized_shape=orig.normalized_shape,
+        normalized_shape=orig.weight.size(-1),
         eps=orig.eps,
-        elementwise_affine=False,
+        # elementwise_affine=False,
         device=orig.weight.device,
     )
     return NormAndScale(ln, orig.weight)
@@ -184,22 +185,35 @@ def main():
                 case T5EncoderLayer():
                     if print_first_block_only and name != 'layers.0': continue
                     def hook(mod, args, output, name: str):
-                        out_list.append(NamedActivation(name, output))
-                        assert output.isfinite().all(), f'{model_name} {name} has non-finite values'
-                        print(f'{model_name} {name:35s}:', stats(output))
+                        # out_list.append(NamedActivation(name, output))
+                        # assert output.isfinite().all(), f'{model_name} {name} has non-finite values'
+                        # print(f'{model_name} {name:35s}:', stats(output))
+                        (x, residual) = output
+                        out_list.append(NamedActivation(f'{name}.x', x))
+                        out_list.append(NamedActivation(f'{name}.residual', residual))
+                        assert x.isfinite().all(), f'{model_name} {name}.x has non-finite values'
+                        assert residual.isfinite().all(), f'{model_name} {name}.residual has non-finite values'
+                        print(f'{model_name} {f"{name}.x":35s}:', stats(x))
+                        print(f'{model_name} {f"{name}.residual":35s}:', stats(residual))
                     handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
                     handles.append(handle)
                 case RMSNormCast():
                     if print_first_block_only and not name.startswith('layers.0'): continue
-                    def hook(mod, args, output, name: str):
+                    def hook(mod, args, kwargs: dict[str, Any], output, name: str):
+                        # assert (name := kwargs.get('name', None)) is not None
                         (input,) = args
                         out_list.append(NamedActivation(f'{name} [input]', input))
                         assert input.isfinite().all(), f'{model_name} {name} [input] has non-finite values'
                         print(f'{model_name} {f"{name} [input]":35s}:', stats(input))
+                        if (residual := kwargs.get('residual', None)) is not None:
+                            out_list.append(NamedActivation(f'{name} [residual]', residual))
+                            assert residual.isfinite().all(), f'{model_name} {name} [residual] has non-finite values'
+                            print(f'{model_name} {f"{name} [residual]":35s}:', stats(residual))
                         out_list.append(NamedActivation(name, output))
                         assert output.isfinite().all(), f'{model_name} {name} has non-finite values'
                         print(f'{model_name} {name:35s}:', stats(output))
-                    handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
+
+                    handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name), with_kwargs=True)
                     handles.append(handle)
                 case GELU():
                     if print_first_block_only and not name.startswith('layers.0'): continue
@@ -260,7 +274,8 @@ def main():
 
     q_smaller = 1
     v_smaller = 1
-    latter_ffn_in_smallers: list[float] = [1/2, 1/8]
+    # latter_ffn_in_smallers: list[float] = [1/2, 1/8]
+    latter_ffn_in_smallers: list[float] = [1, 1]
     ffn_in_smallers: list[float] = [*[1]*(f16_config.num_layers-len(latter_ffn_in_smallers)), *latter_ffn_in_smallers]
     latter_ffn_out_smallers: list[float] = [32, 32]
     # ffn_out_smallers: list[float] = [*[1]*(f16_config.num_layers-len(latter_ffn_out_smallers)), *latter_ffn_out_smallers]

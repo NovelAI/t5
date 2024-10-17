@@ -248,22 +248,25 @@ class T5EncoderLayer(nn.Module):
         x: torch.Tensor,
         position_bias: FloatTensor,
         attn_mask: Optional[BoolTensor] = None,
+        prev_residual: Optional[FloatTensor] = None,
     ) -> FloatTensor:
         residual = x
-        x = self.ln1(x)
+        x = self.ln1(x, residual=prev_residual)
         attn_out: FloatTensor = self.attn(x, position_bias=position_bias, mask=attn_mask)
 
-        x = residual + self.dropout(attn_out)
+        # x = residual + self.dropout(attn_out)
 
-        residual = x
-        x = self.ffn(self.ln2(x))
+        # residual = x
+        # x = self.ffn(self.ln2(x))
+        x = self.ffn(self.ln2(self.dropout(attn_out), residual=residual))
 
         if self.residual_scale is not None:
             residual = residual * self.residual_scale
 
-        x = residual + self.dropout(x)
+        # x = residual + self.dropout(x)
 
-        return x
+        # return x
+        return self.dropout(x), residual
 
     def init_weights(self):
         self.attn.init_weights()
@@ -347,10 +350,12 @@ class T5EncoderStack(nn.Module):
         # note: [t]*n does not duplicate tensors, it just makes a list of n references to the same tensor
         biases: list[FloatTensor] = position_bias.unbind() if self.config.pos_emb_per_layer else [position_bias]*self.config.num_layers
 
+        residual: Optional[FloatTensor] = None
         for layer, bias in zip(self.layers, biases):
             assert isinstance(layer, T5EncoderLayer)
-            x: FloatTensor = layer(x, position_bias=bias, attn_mask=attn_mask)
-        normed: FloatTensor = self.ln(x)
+            # x: FloatTensor = layer(x, position_bias=bias, attn_mask=attn_mask)
+            x, residual = layer(x, position_bias=bias, attn_mask=attn_mask, prev_residual=residual)
+        normed: FloatTensor = self.ln(x, residual=residual)
         return normed
 
     def flop_count_per_sequence(self, input_ids_len: int, labels_len: int) -> int:

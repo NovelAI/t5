@@ -7,7 +7,9 @@ import torch
 from einops import rearrange
 from torch import FloatTensor, LongTensor, Tensor, nn
 from torch.nn import Linear, Embedding
-from torch.nn.modules.normalization import RMSNorm, _shape_t
+from torch.nn.modules.normalization import _shape_t
+# from torch.nn.modules.normalization import RMSNorm, _shape_t
+from .layer_norm import RMSNorm
 from torch.amp import autocast
 
 ####
@@ -323,7 +325,6 @@ def get_ffn_factory(ffn_type: T5FFNType) -> Type[T5ReLUFFN | T5GEGLUFFN]:
 #### RMSNorm
 ####
 
-
 class RMSNormCast(RMSNorm):
     def __init__(
         self,
@@ -333,18 +334,42 @@ class RMSNormCast(RMSNorm):
         device: str | torch.device | None = None,
         dtype: torch.dtype = torch.float32,
     ) -> None:
+        assert isinstance(normalized_shape, int)
+        assert elementwise_affine == True
         super().__init__(
             normalized_shape,
             eps=eps,
-            elementwise_affine=elementwise_affine,
             device=device,
             dtype=dtype,
         )
 
-    @autocast(device_type='cuda', enabled=False)
-    def forward(self, input: Tensor) -> Tensor:
-        dtype = self.weight.dtype if self.elementwise_affine else torch.float32
-        return super().forward(input.type(dtype)).type_as(input)
+    # @autocast(device_type='cuda', enabled=False)
+    # def forward(self, input: Tensor) -> Tensor:
+    #     dtype = self.weight.dtype if self.elementwise_affine else torch.float32
+    #     return super().forward(input.type(dtype)).type_as(input)
+
+
+# class RMSNormCast(RMSNorm):
+#     def __init__(
+#         self,
+#         normalized_shape: _shape_t,
+#         eps: Optional[float] = None,
+#         elementwise_affine: bool = True,
+#         device: str | torch.device | None = None,
+#         dtype: torch.dtype = torch.float32,
+#     ) -> None:
+#         super().__init__(
+#             normalized_shape,
+#             eps=eps,
+#             elementwise_affine=elementwise_affine,
+#             device=device,
+#             dtype=dtype,
+#         )
+
+#     @autocast(device_type='cuda', enabled=False)
+#     def forward(self, input: Tensor) -> Tensor:
+#         dtype = self.weight.dtype if self.elementwise_affine else torch.float32
+#         return super().forward(input.type(dtype)).type_as(input)
 
 
 ####

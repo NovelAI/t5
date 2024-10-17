@@ -122,7 +122,7 @@ def main():
     if bf16_enabled := False:
         bf16_enc, bf16_config = get_model(bf16_dir)
     
-    print_first_block_only = True
+    print_first_block_only = False
 
     f32_activations: list[NamedActivation] = []
     f16_activations: list[NamedActivation] = []
@@ -171,11 +171,11 @@ def main():
                             print(f'{model_name} {f"{name}.wi_0":35s}:', stats(wi_0))
                             print(f'{model_name} {f"{name}.wi_1":35s}:', stats(wi_1))
                         else:
-                            if name.endswith('o_proj'):
-                                (attn,) = args
-                                out_list.append(NamedActivation(f'{name} [input]', attn))
-                                assert attn.isfinite().all(), f'{model_name} {name} [input] has non-finite values'
-                                print(f'{model_name} {f"{name} [input]":35s}:', stats(attn))
+                            if name.endswith('o_proj') or name.endswith('ff_out'):
+                                (out,) = args
+                                out_list.append(NamedActivation(f'{name} [input]', out))
+                                assert out.isfinite().all(), f'{model_name} {name} [input] has non-finite values'
+                                print(f'{model_name} {f"{name} [input]":35s}:', stats(out))
                             out_list.append(NamedActivation(name, output))
                             assert output.isfinite().all(), f'{model_name} {name} has non-finite values'
                             print(f'{model_name} {name:35s}:', stats(output))
@@ -260,10 +260,15 @@ def main():
 
     qk_rebalance = 1
     vo_rebalance = 1
+    latter_rebalances: list[float] = [4, 32]
+    ffn_rebalances: list[float] = [*[1]*(f16_config.num_layers-len(latter_rebalances)), *latter_rebalances]
+    ffn_rebalance_via_residual = False
     print('qk_rebalance:', qk_rebalance)
     print('vo_rebalance:', vo_rebalance)
+    print('ffn_rebalances:', ffn_rebalances)
+    print('ffn_rebalance_via_residual:', ffn_rebalance_via_residual)
     with inference_mode():
-        for f16_layer, f32_layer in zip(f16_enc.layers, f32_enc.layers):
+        for layer_ix, (f16_layer, f32_layer, ffn_rebalance) in enumerate(zip(f16_enc.layers, f32_enc.layers, ffn_rebalances)):
             f16_layer: T5EncoderLayer
             f32_layer: T5EncoderLayer
             q16, k16, v16 = f16_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
@@ -271,14 +276,34 @@ def main():
             o16 = f16_layer.attn.o_proj.weight
             o32 = f32_layer.attn.o_proj.weight
             if qk_rebalance != 1:
-                q16.copy_(q32.div(qk_rebalance).half())
-                k16.copy_(k32.mul(qk_rebalance).half())
+                q16.copy_(q32.div(qk_rebalance).type_as(q16))
+                k16.copy_(k32.mul(qk_rebalance).type_as(k16))
             if vo_rebalance != 1:
-                v16.copy_(v32.div(vo_rebalance).half())
-                o16.copy_(o32.mul(vo_rebalance).half())
-            break
+                v16.copy_(v32.div(vo_rebalance).type_as(v16))
+                o16.copy_(o32.mul(vo_rebalance).type_as(o16))
+
+            _, ungated16 = f16_layer.ffn.ff_in.weight.chunk(2, dim=-2)
+            _, ungated32 = f32_layer.ffn.ff_in.weight.chunk(2, dim=-2)
+            out16 = f16_layer.ffn.ff_out.weight
+            out32 = f32_layer.ffn.ff_out.weight
+            if layer_ix == 6:
+                pass
+            if ffn_rebalance != 1:
+                ungated16.copy_(ungated32.div(ffn_rebalance).type_as(ungated16))
+                if ffn_rebalance_via_residual:
+                    f16_layer.register_buffer('residual_scale', out16.new_tensor(ffn_rebalance, requires_grad=False), persistent=True)
+                    if layer_ix == f16_config.num_layers - 1:
+                        next_norm: RMSNormCast = f16_enc.ln
+                    else:
+                        next_layer: T5EncoderLayer = f16_enc.layers[layer_ix + 1]
+                        next_norm: RMSNormCast = next_layer.ln1
+                    next_norm.eps /= ffn_rebalance
+                else:
+                    out16.copy_(out32.mul(ffn_rebalance).type_as(out16))
     
-    if fuse_norms := True:
+    fuse_norms = True
+    print('fuse_norms:', fuse_norms)
+    if fuse_norms:
         with inference_mode():
             for f16_layer, f32_layer in zip(f16_enc.layers, f32_enc.layers):
                 f16_layer: T5EncoderLayer
@@ -297,12 +322,12 @@ def main():
                 qkv_16.copy_((qkv_32 @ scale1_diag).type_as(qkv_16))
 
                 # TODO: enable this later, after we work around the NaN that it introduces
-                # ln2, scale2 = extract_norm_scales(f32_layer.ln2)
-                # setattr(f16_layer, 'ln2', ln2)
-                # ff_in_16 = f16_layer.ffn.ff_in.weight
-                # ff_in_32 = f32_layer.ffn.ff_in.weight
-                # scale2_diag: FloatTensor = torch.eye(scale2.size(-1), device=device, dtype=scale2.dtype) * scale2.unsqueeze(-1)
-                # ff_in_16.copy_((ff_in_32 @ scale2_diag).type_as(ff_in_16))
+                ln2, scale2 = extract_norm_scales(f32_layer.ln2)
+                setattr(f16_layer, 'ln2', ln2)
+                ff_in_16 = f16_layer.ffn.ff_in.weight
+                ff_in_32 = f32_layer.ffn.ff_in.weight
+                scale2_diag: FloatTensor = torch.eye(scale2.size(-1), device=device, dtype=scale2.dtype) * scale2.unsqueeze(-1)
+                ff_in_16.copy_((ff_in_32 @ scale2_diag).type_as(ff_in_16))
 
     seed = 42
     with (

@@ -335,10 +335,10 @@ class RMSNormCast(RMSNorm):
         dtype: torch.dtype = torch.float32,
     ) -> None:
         assert isinstance(normalized_shape, int)
-        assert elementwise_affine == True
         super().__init__(
             normalized_shape,
             eps=eps,
+            elementwise_affine=elementwise_affine,
             device=device,
             dtype=dtype,
         )

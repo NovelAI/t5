@@ -71,7 +71,7 @@ def explain_diff(ref: FloatTensor, candidate: FloatTensor) -> FloatTensor:
     diff = ref.float().sub(candidate.float())
     qs = torch.tensor([.5, .75, .9, .95, .99, .999, .9999], device=ref.device)
     q = diff.abs().quantile(qs)
-    print(f'quantiles ({qs.cpu()}):\n           {q.cpu()}')
+    print(str(q.cpu()).removeprefix("tensor(").removesuffix(")"))
     stat(diff, 'diff')
 
 
@@ -375,21 +375,23 @@ def main():
             assert f16_out.isfinite().all(), 'f16_out has non-finite values'
     
     if f32_enabled:
+        if bf16_enabled or f16_enabled:
+            qs = torch.tensor([.5, .75, .9, .95, .99, .999, .9999], device=device)
+            print("quantiles:")
+            print(str(qs.cpu()).removeprefix("tensor(").removesuffix(")"))
         if f16_enabled:
             print('f32 vs f16:')
             explain_diff(f32_out, f16_out)
-            qs = torch.tensor([.5, .75, .9, .95, .99, .999, .9999], device=device)
-            print("abs differences between layer activations...")
-            print("quantiles:")
-            print(str(qs.cpu()).removeprefix("tensor(").removesuffix(")"))
+        if bf16_enabled:
+            print('f32 vs bf16:')
+            explain_diff(f32_out, bf16_out)
+        if f32_activations and f16_activations:
+            print("abs differences between f32, f16 layer activations...")
             torch.set_printoptions(linewidth=200)
             for f32_act, f16_act in zip(f32_activations, f16_activations):
                 diff = f32_act.act.float().sub(f16_act.act.float())
                 absdiff = diff.abs()
                 print(f'{f32_act.name:35s}: {stats(absdiff):80s} {str(absdiff.quantile(qs).cpu()).removeprefix("tensor(").removesuffix(")")}')
-        if bf16_enabled:
-            print('f32 vs bf16:')
-            explain_diff(f32_out, bf16_out)
     pass  # somewhere to put your breakpoint
 
 if __name__ == "__main__":

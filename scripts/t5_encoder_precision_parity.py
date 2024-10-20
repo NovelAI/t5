@@ -205,13 +205,22 @@ def main():
                         out_list.append(NamedActivation(f'{name} [input]', input))
                         assert input.isfinite().all(), f'{model_name} {name} [input] has non-finite values'
                         print(f'{model_name} {f"{name} [input]":35s}:', stats(input))
-                        if (residual := kwargs.get('residual', None)) is not None:
-                            out_list.append(NamedActivation(f'{name} [residual]', residual))
-                            assert residual.isfinite().all(), f'{model_name} {name} [residual] has non-finite values'
-                            print(f'{model_name} {f"{name} [residual]":35s}:', stats(residual))
-                        out_list.append(NamedActivation(name, output))
-                        assert output.isfinite().all(), f'{model_name} {name} has non-finite values'
-                        print(f'{model_name} {name:35s}:', stats(output))
+                        if (residual_in := kwargs.get('residual', None)) is not None:
+                            out_list.append(NamedActivation(f'{name} [residual_in]', residual_in))
+                            assert residual_in.isfinite().all(), f'{model_name} {name} [residual_in] has non-finite values'
+                            print(f'{model_name} {f"{name} [residual_in]":35s}:', stats(residual_in))
+                        if torch.is_tensor(output):
+                            out_list.append(NamedActivation(name, output))
+                            assert output.isfinite().all(), f'{model_name} {name} has non-finite values'
+                            print(f'{model_name} {name:35s}:', stats(output))
+                        else:
+                            act, residual_out = output
+                            out_list.append(NamedActivation(name, act))
+                            out_list.append(NamedActivation(f'{name} [residual_out]', residual_out))
+                            assert act.isfinite().all(), f'{model_name} {name} has non-finite values'
+                            assert residual_out.isfinite().all(), f'{model_name} {name} [residual_out] has non-finite values'
+                            print(f'{model_name} {name:35s}:', stats(act))
+                            print(f'{model_name} {f"{name} [residual_out]":35s}:', stats(residual_out))
 
                     handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name), with_kwargs=True)
                     handles.append(handle)
@@ -361,7 +370,7 @@ def main():
                     input_ids=input_ids,
                     input_mask=mask,
                 )
-                assert f32_out.isfinite().all(), 'f32_out has non-finite values'
+            assert f32_out.isfinite().all(), 'f32_out has non-finite values'
         if bf16_enabled:
             bf16_out: FloatTensor = bf16_enc(
                 input_ids=input_ids,

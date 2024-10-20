@@ -16,6 +16,7 @@ from .t5_common import (
     T5Config,
     T5RelativeAttentionBias,
     T5ReLUFFN,
+    ActAndResidual,
     flash_attention_flops,
     get_ffn_factory,
 )
@@ -245,28 +246,20 @@ class T5EncoderLayer(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,
+        x_r: ActAndResidual,
         position_bias: FloatTensor,
         attn_mask: Optional[BoolTensor] = None,
-        prev_residual: Optional[FloatTensor] = None,
-    ) -> FloatTensor:
-        residual = x
-        x = self.ln1(x, residual=prev_residual)
-        attn_out: FloatTensor = self.attn(x, position_bias=position_bias, mask=attn_mask)
-
-        # x = residual + self.dropout(attn_out)
-
-        # residual = x
-        # x = self.ffn(self.ln2(x))
-        x = self.ffn(self.ln2(self.dropout(attn_out), residual=residual))
+    ) -> ActAndResidual:
+        x, residual = x_r
+        x, residual = self.ln1(x, residual=residual)
+        x = self.attn(x, position_bias=position_bias, mask=attn_mask)
+        x, residual = self.ln2(self.dropout(x), residual=residual)
+        x = self.ffn(x)
 
         if self.residual_scale is not None:
             residual = residual * self.residual_scale
 
-        # x = residual + self.dropout(x)
-
-        # return x
-        return self.dropout(x), residual
+        return ActAndResidual(self.dropout(x), residual)
 
     def init_weights(self):
         self.attn.init_weights()
@@ -344,19 +337,18 @@ class T5EncoderStack(nn.Module):
                     raise ValueError(
                         f"Expected 2 or 3-dim input mask, got mask {input_mask.shape} for {input_ids.shape} inputs."
                     )
-        x: FloatTensor = self.dropout(input_embeds)
 
         # UMT5 has a position embedding per layer, and we computed all of them simultaneously
         # note: [t]*n does not duplicate tensors, it just makes a list of n references to the same tensor
         biases: list[FloatTensor] = position_bias.unbind() if self.config.pos_emb_per_layer else [position_bias]*self.config.num_layers
 
-        residual: Optional[FloatTensor] = None
+        x_r = ActAndResidual(self.dropout(input_embeds), None)
         for layer, bias in zip(self.layers, biases):
             assert isinstance(layer, T5EncoderLayer)
-            # x: FloatTensor = layer(x, position_bias=bias, attn_mask=attn_mask)
-            x, residual = layer(x, position_bias=bias, attn_mask=attn_mask, prev_residual=residual)
-        normed: FloatTensor = self.ln(x, residual=residual)
-        return normed
+            x_r = layer(x_r, position_bias=bias, attn_mask=attn_mask)
+        x, residual = x_r
+        x = self.ln(x, residual=residual, prenorm=False)
+        return x
 
     def flop_count_per_sequence(self, input_ids_len: int, labels_len: int) -> int:
         # note: encoder doesn't look at labels

@@ -1,6 +1,6 @@
 import math
 from enum import Enum
-from typing import Optional, Type, Literal, Dict
+from typing import Optional, Type, Literal, Dict, NamedTuple
 from pydantic import BaseModel, field_validator, field_serializer
 
 import torch
@@ -109,6 +109,16 @@ class T5Config(BaseModel):
     @classmethod
     def dtype_serialize(cls, val: torch.dtype) -> DType:
         return DTypeSerializer.dtype_serialize(val)
+
+
+####
+#### Residualized activation
+####
+
+class ActAndResidual(NamedTuple):
+    x: FloatTensor
+    residual: FloatTensor
+
 
 ####
 #### T5 bias
@@ -342,6 +352,13 @@ class RMSNormCast(RMSNorm):
             device=device,
             dtype=dtype,
         )
+    
+    def forward(self, x: FloatTensor, residual: FloatTensor, prenorm=True) -> ActAndResidual | FloatTensor:
+        out = super().forward(x, residual=residual, prenorm=prenorm, residual_in_fp32=True)
+        if prenorm:
+            x, residual = out
+            return ActAndResidual(x=x, residual=residual)
+        return out
 
     # @autocast(device_type='cuda', enabled=False)
     # def forward(self, input: Tensor) -> Tensor:

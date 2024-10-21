@@ -306,6 +306,8 @@ def main():
 
     ln2_eps_scales = attn_out_scales_cp_hat
 
+    final_norm_eps_scale = ffn_out_scales_cp_hat[-1].item()
+
     ffn_in_smaller_via_residual = False
     # print('q_smaller:', q_smaller)
     # print('v_smaller:', v_smaller)
@@ -383,6 +385,8 @@ def main():
             #         next_norm.eps /= ffn_in_smaller
             #     else:
             #         out16.copy_(out32.mul(ffn_in_smaller).type_as(out16))
+        if final_norm_eps_scale != 1:
+            f16_enc.ln.eps *= final_norm_eps_scale
     
     fuse_norms = True
     print('fuse_norms:', fuse_norms)

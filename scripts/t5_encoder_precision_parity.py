@@ -48,6 +48,13 @@ class PrecisionMode(str, Enum):
     PureBF16 = 'pure-bf16'
     PureF16 = 'pure-f16'
 
+class Checkpoint(str, Enum):
+    T5v1_1Small = 't5-v1.1-small'
+    T5v1_1XL = 't5-v1.1-xl'
+    # T5v1_1XXL = 't5-v1.1-xxl'
+    T5v1Large = 't5-v1-large'
+    PileT5Large = 'pile-t5-large'
+
 
 class EncAndConfig(NamedTuple):
     enc: T5EncoderStack
@@ -96,18 +103,26 @@ def extract_norm_scales(orig: RMSNorm) -> NormAndScale:
 def main():
     device = torch.device("cuda")
 
-    f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-small-f32')
-    f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-small-f16')
-    bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-small-bf16')
-    # f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-xl-f32')
-    # f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-xl-f16')
-    # bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-xl-bf16')
-    # f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog-v1/t5-large-f32')
-    # f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog-v1/t5-large-f16')
-    # bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog-v1/t5-large-bf16')
-    # f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/eleuther/pile-t5-large-f32')
-    # f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/eleuther/pile-t5-large-f16')
-    # bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/eleuther/pile-t5-large-bf16')
+    ckpt = Checkpoint.T5v1_1Small
+    match ckpt:
+        case Checkpoint.T5v1_1Small:
+            f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-small-f32')
+            f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-small-f16')
+            bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-small-bf16')
+        case Checkpoint.T5v1_1XL:
+            f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-xl-f32')
+            f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-xl-f16')
+            bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-xl-bf16')
+        case Checkpoint.T5v1Large:
+            f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog-v1/t5-large-f32')
+            f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog-v1/t5-large-f16')
+            bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog-v1/t5-large-bf16')
+        case Checkpoint.PileT5Large:
+            f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/eleuther/pile-t5-large-f32')
+            f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/eleuther/pile-t5-large-f16')
+            bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/eleuther/pile-t5-large-bf16')
+        case _:
+            raise ValueError(f'unknown checkpoint: {ckpt}')
 
     do_autocast = False
     f32_enc: Optional[T5EncoderStack] = None
@@ -287,12 +302,22 @@ def main():
     latter_ffn_in_smallers: list[float] = [1, 1]
     ffn_in_smallers: list[float] = [*[1]*(f16_config.num_layers-len(latter_ffn_in_smallers)), *latter_ffn_in_smallers]
 
-    latter_attn_out_scales: list[float] = []
-    attn_out_scales: FloatTensor = torch.tensor([*[1]*(f16_config.num_layers-len(latter_attn_out_scales)), *latter_attn_out_scales], dtype=torch.float32)
+    match ckpt:
+        case Checkpoint.T5v1_1Small:
+            attn_out_scales = [1]*f16_config.num_layers
+            ffn_out_scales = [*[1]*6, 1/8, 1]
+        case Checkpoint.T5v1_1XL:
+            attn_out_scales = [1]*f16_config.num_layers
+            ffn_out_scales = [1]*f16_config.num_layers
+        case _:
+            print(f'WARN: no f16 scaling known for {ckpt}')
+            attn_out_scales = [1]*f16_config.num_layers
+            ffn_out_scales = [1]*f16_config.num_layers
+
+    attn_out_scales: FloatTensor = torch.tensor(attn_out_scales, dtype=torch.float32)
     attn_out_scales_cp: FloatTensor = attn_out_scales.cumprod(-1)
     
-    latter_ffn_out_scales: list[float] = [1/8, 1]
-    ffn_out_scales: FloatTensor = torch.tensor([*[1]*(f16_config.num_layers-len(latter_ffn_out_scales)), *latter_ffn_out_scales], dtype=torch.float32)
+    ffn_out_scales: FloatTensor = torch.tensor(ffn_out_scales, dtype=torch.float32)
     ffn_out_scales_cp: FloatTensor = ffn_out_scales.cumprod(-1)
 
     attn_out_scales_cp_hat = attn_out_scales_cp.clone()

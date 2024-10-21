@@ -227,7 +227,10 @@ class T5EncoderLayer(nn.Module):
     """post-attn layer norm"""
     ffn: T5ReLUFFN | T5GEGLUFFN
     dropout: nn.Dropout
-    residual_scale: Optional[FloatTensor]
+    # ln1_residual_scale: Optional[FloatTensor]
+    # ln2_residual_scale: Optional[FloatTensor]
+    ln1_residual_scale: Optional[float]
+    ln2_residual_scale: Optional[float]
 
     def __init__(
         self,
@@ -242,7 +245,10 @@ class T5EncoderLayer(nn.Module):
         self.ffn = ffn_factory(config)
         self.dropout = nn.Dropout(config.dropout)
         # TODO: expose via config somehow
-        self.register_buffer('residual_scale', None)
+        # self.register_buffer('ln1_residual_scale', None)
+        # self.register_buffer('ln2_residual_scale', None)
+        self.ln1_residual_scale = None
+        self.ln2_residual_scale = None
 
     def forward(
         self,
@@ -252,13 +258,13 @@ class T5EncoderLayer(nn.Module):
     ) -> ActAndResidual:
         x, residual = x_r
         x, residual = self.ln1(x, residual=residual)
+        if self.ln1_residual_scale is not None:
+            residual = residual * self.ln1_residual_scale
         x = self.attn(x, position_bias=position_bias, mask=attn_mask)
         x, residual = self.ln2(self.dropout(x), residual=residual)
+        if self.ln2_residual_scale is not None:
+            residual = residual * self.ln2_residual_scale
         x = self.ffn(x)
-
-        if self.residual_scale is not None:
-            residual = residual * self.residual_scale
-
         return ActAndResidual(self.dropout(x), residual)
 
     def init_weights(self):

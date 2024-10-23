@@ -146,13 +146,17 @@ def main():
     f32_config: Optional[T5Config] = None
     f16_config: Optional[T5Config] = None
     bf16_config: Optional[T5Config] = None
-    if f32_enabled := False or (f32_weight_donor := False):
+    # load if you intend to invoke the model, or if you intend to use it as a weight donor.
+    # if you're loading it anyway, then we designate it as avaiable for weight donation too.
+    if f32_enabled := True or (f32_weight_donor := False):
+        f32_weight_donor = True
         dtype: Optional[torch.dtype] = torch.float32 if f32_needs_cast else None
         f32_enc, f32_config = get_model(f32_dir, dtype=dtype)
     if f16_enabled := True:
         dtype: Optional[torch.dtype] = torch.float16 if f16_needs_cast else None
         f16_enc, f16_config = get_model(f16_dir, dtype=dtype)
     if bf16_enabled := False or (bf16_weight_donor := False):
+        bf16_weight_donor = True
         dtype: Optional[torch.dtype] = torch.bfloat16 if bf16_needs_cast else None
         bf16_enc, bf16_config = get_model(bf16_dir)
     

@@ -1,4 +1,4 @@
-from typing import Any, Callable, NamedTuple
+from typing import Any, Callable, NamedTuple, TypeVar
 import json
 from pathlib import Path
 from enum import Enum
@@ -100,6 +100,11 @@ def extract_norm_scales(orig: RMSNorm) -> NormAndScale:
     )
     return NormAndScale(ln, orig.weight)
 
+T = TypeVar('T')
+class VoidList(list[T]):
+    def append(self, _: T) -> None:
+        pass
+
 def main():
     device = torch.device("cuda")
 
@@ -141,21 +146,23 @@ def main():
     f32_config: Optional[T5Config] = None
     f16_config: Optional[T5Config] = None
     bf16_config: Optional[T5Config] = None
-    if f32_enabled := True or (weight_donor := True):
+    if f32_enabled := False or (f32_weight_donor := False):
         dtype: Optional[torch.dtype] = torch.float32 if f32_needs_cast else None
         f32_enc, f32_config = get_model(f32_dir, dtype=dtype)
     if f16_enabled := True:
         dtype: Optional[torch.dtype] = torch.float16 if f16_needs_cast else None
         f16_enc, f16_config = get_model(f16_dir, dtype=dtype)
-    if bf16_enabled := True:
+    if bf16_enabled := False or (bf16_weight_donor := False):
         dtype: Optional[torch.dtype] = torch.bfloat16 if bf16_needs_cast else None
         bf16_enc, bf16_config = get_model(bf16_dir)
     
     print_first_block_only = False
 
-    f32_activations: list[NamedActivation] = []
-    f16_activations: list[NamedActivation] = []
-    bf16_activations: list[NamedActivation] = []
+    retain_activations = False
+
+    f32_activations: list[NamedActivation] = [] if retain_activations else VoidList()
+    f16_activations: list[NamedActivation] = [] if retain_activations else VoidList()
+    bf16_activations: list[NamedActivation] = [] if retain_activations else VoidList()
 
     def instrument_nai_t5(module: T5EncoderStack, config: T5Config, out_list: list[NamedActivation], model_name: str) -> Callable[[], None]:
         from torch.nn import GELU, Embedding, Linear
@@ -347,6 +354,8 @@ def main():
 
     final_norm_eps_scale = ffn_out_scales_cp_hat[-1].item()
 
+    donor: T5EncoderStack = f32_enc if f32_enabled else (bf16_enc if bf16_enabled else f16_enc)
+
     ffn_in_smaller_via_residual = False
     # print('q_smaller:', q_smaller)
     # print('v_smaller:', v_smaller)
@@ -371,7 +380,7 @@ def main():
             ln2_eps_scale,
         ) in enumerate(zip(
             f16_enc.layers,
-            f32_enc.layers,
+            donor.layers,
             ffn_in_smallers,
             attn_out_scales.tolist(),
             attn_out_scales_cp_hat.tolist(),
@@ -383,9 +392,9 @@ def main():
             f16_layer: T5EncoderLayer
             f32_layer: T5EncoderLayer
             q16, k16, v16 = f16_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
-            q32, k32, v32 = f32_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
+            q32, k32, v32 = f32_layer.attn.qkv_proj.weight.float().chunk(3, dim=-2)
             o16 = f16_layer.attn.o_proj.weight
-            o32 = f32_layer.attn.o_proj.weight
+            o32 = f32_layer.attn.o_proj.weight.float()
             if q_smaller != 1:
                 q16.copy_(q32.div(q_smaller).type_as(q16))
                 k16.copy_(k32.mul(q_smaller).type_as(k16))
@@ -394,9 +403,9 @@ def main():
                 o16.copy_(o32.mul(v_smaller).type_as(o16))
 
             _, ungated16 = f16_layer.ffn.ff_in.weight.chunk(2, dim=-2)
-            _, ungated32 = f32_layer.ffn.ff_in.weight.chunk(2, dim=-2)
+            _, ungated32 = f32_layer.ffn.ff_in.weight.float().chunk(2, dim=-2)
             out16 = f16_layer.ffn.ff_out.weight
-            out32 = f32_layer.ffn.ff_out.weight
+            out32 = f32_layer.ffn.ff_out.weight.float()
             if layer_ix == 6:
                 pass
             if attn_out_scale != 1:
@@ -431,7 +440,7 @@ def main():
     print('fuse_norms:', fuse_norms)
     if fuse_norms:
         with inference_mode():
-            for f16_layer, f32_layer in zip(f16_enc.layers, f32_enc.layers):
+            for f16_layer, f32_layer in zip(f16_enc.layers, donor.layers):
                 f16_layer: T5EncoderLayer
                 f32_layer: T5EncoderLayer
 
@@ -441,9 +450,9 @@ def main():
                 # q16, k16, v16 = f16_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
                 # q32, k32, v32 = f32_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
                 qkv_16 = f16_layer.attn.qkv_proj.weight
-                qkv_32 = f32_layer.attn.qkv_proj.weight
+                qkv_32 = f32_layer.attn.qkv_proj.weight.float()
 
-                scale1_diag: FloatTensor = torch.eye(scale1.size(-1), device=device, dtype=scale1.dtype) * scale1.unsqueeze(-1)
+                scale1_diag: FloatTensor = torch.eye(scale1.size(-1), device=device, dtype=torch.float32) * scale1.float().unsqueeze(-1)
                 # q16.copy_((q32 @ scale1_diag).type_as(q16))
                 qkv_16.copy_((qkv_32 @ scale1_diag).type_as(qkv_16))
 
@@ -451,8 +460,8 @@ def main():
                 ln2, scale2 = extract_norm_scales(f32_layer.ln2)
                 setattr(f16_layer, 'ln2', ln2)
                 ff_in_16 = f16_layer.ffn.ff_in.weight
-                ff_in_32 = f32_layer.ffn.ff_in.weight
-                scale2_diag: FloatTensor = torch.eye(scale2.size(-1), device=device, dtype=scale2.dtype) * scale2.unsqueeze(-1)
+                ff_in_32 = f32_layer.ffn.ff_in.weight.float()
+                scale2_diag: FloatTensor = torch.eye(scale2.size(-1), device=device, dtype=torch.float32) * scale2.float().unsqueeze(-1)
                 ff_in_16.copy_((ff_in_32 @ scale2_diag).type_as(ff_in_16))
 
     seed = 42

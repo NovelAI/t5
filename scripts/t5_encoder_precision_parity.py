@@ -330,6 +330,10 @@ def main():
             # 24 layers
             attn_out_scales = [1]*f16_config.num_layers
             ffn_out_scales = [*[1]*4, 1/8, *[1]*19]
+        case Checkpoint.T5v1_1XXL:
+            # 24 layers
+            attn_out_scales = [1]*f16_config.num_layers
+            ffn_out_scales = [*[1]*10, 1/4, *[1]*13]
         case _:
             print(f'WARN: no f16 scaling known for {ckpt}')
             attn_out_scales = [1]*f16_config.num_layers

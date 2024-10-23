@@ -51,7 +51,7 @@ class PrecisionMode(str, Enum):
 class Checkpoint(str, Enum):
     T5v1_1Small = 't5-v1.1-small'
     T5v1_1XL = 't5-v1.1-xl'
-    # T5v1_1XXL = 't5-v1.1-xxl'
+    T5v1_1XXL = 't5-v1.1-xxl'
     T5v1Large = 't5-v1-large'
     PileT5Large = 'pile-t5-large'
 
@@ -61,7 +61,7 @@ class EncAndConfig(NamedTuple):
     conf: T5Config
 
 
-def get_model(dir: Path) -> EncAndConfig:
+def get_model(dir: Path, dtype: Optional[torch.dtype] = None) -> EncAndConfig:
     with open(dir / 'config.json', 'r') as f:
         conf_dict: dict[str, Any] = json.load(f)
     config: T5Config = T5Config.model_validate(conf_dict)
@@ -69,7 +69,7 @@ def get_model(dir: Path) -> EncAndConfig:
     with torch.device('meta'):
         enc: T5EncoderStack = T5EncoderStack(config).eval()
 
-    deserializer = TensorDeserializer(dir / 'enc.tensors', lazy_load=True)
+    deserializer = TensorDeserializer(dir / 'enc.tensors', lazy_load=True, dtype=dtype)
     deserializer.load_into_module(enc)
     deserializer.close()
     return EncAndConfig(enc, config)
@@ -103,21 +103,31 @@ def extract_norm_scales(orig: RMSNorm) -> NormAndScale:
 def main():
     device = torch.device("cuda")
 
-    ckpt = Checkpoint.T5v1_1Small
+    ckpt = Checkpoint.T5v1_1XXL
     match ckpt:
         case Checkpoint.T5v1_1Small:
+            f32_needs_cast = f16_needs_cast = bf16_needs_cast = False
             f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-small-f32')
             f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-small-f16')
             bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-small-bf16')
         case Checkpoint.T5v1_1XL:
+            f32_needs_cast = f16_needs_cast = bf16_needs_cast = False
             f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-xl-f32')
             f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-xl-f16')
             bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-xl-bf16')
+        case Checkpoint.T5v1_1XXL:
+            f32_needs_cast = f16_needs_cast = True
+            bf16_needs_cast = False
+            f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-xxl-bf16')
+            f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-xxl-bf16')
+            bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog/t5-v1_1-xxl-bf16')
         case Checkpoint.T5v1Large:
+            f32_needs_cast = f16_needs_cast = bf16_needs_cast = False
             f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog-v1/t5-large-f32')
             f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog-v1/t5-large-f16')
             bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/goog-v1/t5-large-bf16')
         case Checkpoint.PileT5Large:
+            f32_needs_cast = f16_needs_cast = bf16_needs_cast = False
             f32_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/eleuther/pile-t5-large-f32')
             f16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/eleuther/pile-t5-large-f16')
             bf16_dir = Path('/mnt/clusterstorage/models/nait5-tensorizer/eleuther/pile-t5-large-bf16')
@@ -131,11 +141,14 @@ def main():
     f32_config: Optional[T5Config] = None
     f16_config: Optional[T5Config] = None
     bf16_config: Optional[T5Config] = None
-    if f32_enabled := True:
-        f32_enc, f32_config = get_model(f32_dir)
+    if f32_enabled := True or (weight_donor := True):
+        dtype: Optional[torch.dtype] = torch.float32 if f32_needs_cast else None
+        f32_enc, f32_config = get_model(f32_dir, dtype=dtype)
     if f16_enabled := True:
-        f16_enc, f16_config = get_model(f16_dir)
-    if bf16_enabled := False:
+        dtype: Optional[torch.dtype] = torch.float16 if f16_needs_cast else None
+        f16_enc, f16_config = get_model(f16_dir, dtype=dtype)
+    if bf16_enabled := True:
+        dtype: Optional[torch.dtype] = torch.bfloat16 if bf16_needs_cast else None
         bf16_enc, bf16_config = get_model(bf16_dir)
     
     print_first_block_only = False
@@ -448,7 +461,8 @@ def main():
         fin(instrument_nai_t5(f32_enc, f32_config, f32_activations, ' f32')) if f32_enabled else nullcontext(),
         fin(instrument_nai_t5(f16_enc, f16_config, f16_activations, ' f16')) if f16_enabled else nullcontext(),
         fin(instrument_nai_t5(bf16_enc, bf16_config, bf16_activations, 'bf16')) if bf16_enabled else nullcontext(),
-        sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION),
+        # sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION),
+        # sdpa_kernel(SDPBackend.CUDNN_ATTENTION),
     ):
         torch.manual_seed(seed)
         if f32_enabled:

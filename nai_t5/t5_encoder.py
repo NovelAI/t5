@@ -20,7 +20,7 @@ from .t5_common import (
     flash_attention_flops,
     get_ffn_factory,
 )
-from .flex.flex_utils import ScoreMod, MaskMod
+from .flex_utils import ScoreMod, MaskMod
 
 if TYPE_CHECKING:
     # avoid runtime import to prevent explosion on older PyTorch

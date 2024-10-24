@@ -343,6 +343,7 @@ class RMSNormCast(RMSNorm):
         elementwise_affine: bool = True,
         device: str | torch.device | None = None,
         dtype: torch.dtype = torch.float32,
+        residual_scale: Optional[float] = None,
     ) -> None:
         assert isinstance(normalized_shape, int)
         super().__init__(
@@ -351,6 +352,7 @@ class RMSNormCast(RMSNorm):
             elementwise_affine=elementwise_affine,
             device=device,
             dtype=dtype,
+            residual_scale=residual_scale,
         )
     
     def forward(self, x: FloatTensor, residual: FloatTensor, prenorm=True) -> ActAndResidual | FloatTensor:

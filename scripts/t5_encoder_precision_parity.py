@@ -417,14 +417,14 @@ def main():
             if layer_ix == 6:
                 pass
             if attn_out_scale != 1:
-                f16_layer.ln1_residual_scale = attn_out_scale
+                f16_layer.ln1.residual_scale = attn_out_scale
             if attn_out_scale_cp != 1:
                 o16.copy_(o32.mul(attn_out_scale_cp).type_as(o16))
             if ln1_eps_scale != 1:
                 f16_layer.ln1.eps *= ln1_eps_scale
 
             if ffn_out_scale != 1:
-                f16_layer.ln2_residual_scale = ffn_out_scale
+                f16_layer.ln2.residual_scale = ffn_out_scale
             if ffn_out_scale_cp != 1:
                 out16.copy_(out32.mul(ffn_out_scale_cp).type_as(out16))
             if ln2_eps_scale != 1:
@@ -453,6 +453,7 @@ def main():
                 f32_layer: T5EncoderLayer
 
                 ln1, scale1 = extract_norm_scales(f32_layer.ln1)
+                ln1.residual_scale = f16_layer.ln1.residual_scale
                 setattr(f16_layer, 'ln1', ln1)
 
                 # q16, k16, v16 = f16_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
@@ -466,6 +467,7 @@ def main():
 
                 # TODO: enable this later, after we work around the NaN that it introduces
                 ln2, scale2 = extract_norm_scales(f32_layer.ln2)
+                ln2.residual_scale = f16_layer.ln2.residual_scale
                 setattr(f16_layer, 'ln2', ln2)
                 ff_in_16 = f16_layer.ffn.ff_in.weight
                 ff_in_32 = f32_layer.ffn.ff_in.weight.float()

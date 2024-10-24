@@ -362,11 +362,6 @@ class RMSNormCast(RMSNorm):
             return ActAndResidual(x=x, residual=residual)
         return out
 
-    # @autocast(device_type='cuda', enabled=False)
-    # def forward(self, input: Tensor) -> Tensor:
-    #     dtype = self.weight.dtype if self.elementwise_affine else torch.float32
-    #     return super().forward(input.type(dtype)).type_as(input)
-
 
 # class RMSNormCast(RMSNorm):
 #     def __init__(

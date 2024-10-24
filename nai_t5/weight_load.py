@@ -64,23 +64,23 @@ class AcceptFusion(Protocol):
 def fuse_norm_scale(
     w: FloatTensor,
     scale: FloatTensor,
-    scale_dtype: Optional[torch.dtype] = None,
+    scale_via_f32 = False,
 ) -> FloatTensor:
-    dtype = scale_dtype or scale.dtype
+    higher_type: torch.dtype = torch.float32 if scale_via_f32 else torch.promote_types(w.dtype, scale.dtype)
     scale_diag: FloatTensor = torch.eye(
         scale.size(-1),
         device=scale.device,
-        dtype=dtype,
-    ) * scale.type(dtype).unsqueeze(-1)
-    higher_type: torch.dtype = torch.promote_types(w.dtype, scale_diag.dtype)
-    w.copy_(w.type(higher_type) @ scale_diag)
+        dtype=higher_type,
+    ) * scale.type(higher_type).unsqueeze(-1)
+    matmul_type = torch.float32 if scale_via_f32 else higher_type
+    w.copy_(w.type(matmul_type) @ scale_diag.type(matmul_type))
 
 class FusingDeserializer(TensorDeserializer):
     def load_with_fusions(
         self,
         m: T5 | T5EncoderStack,
-        fusion_dtype: Optional[torch.dtype] = None,
-        scale_dtype: Optional[torch.dtype] = None,
+        fuse_norms_via_f32 = False,
+        scale_proj_via_f32 = False,
         fuse_norm_scales = True,
         attn_out_scales: Optional[list[float]] = None,
         ffn_out_scales: Optional[list[float]] = None,
@@ -105,15 +105,18 @@ class FusingDeserializer(TensorDeserializer):
         
         keys: tuple[str, ...] = tuple(self._metadata.keys())
 
-        is_ln1 = re.compile(r'layers\.\d+\.ln1.weight$')
-        is_ln2 = re.compile(r'layers\.\d+\.ln2.weight$')
-        is_ln1or2 = re.compile(r'layers\.\d+\.ln[12].weight$')
-        ln_wants_lin: dict[str, str] = {
-            **{k: k.replace('ln1', 'attn.qkv_proj') for k, *_ in keys if re.search(is_ln1, k)},
-            **{k: k.replace('ln2', 'ffn.ff_in') for k, *_ in keys if re.search(is_ln2, k)},
-        }
-        lin_wants_ln: dict[str, str] = {v: k for k, v in ln_wants_lin.items()}
-        wants_fusion = ln_wants_lin.keys() | lin_wants_ln.keys()
+        if fuse_norm_scales:
+            is_ln1 = re.compile(r'layers\.\d+\.ln1.weight$')
+            is_ln2 = re.compile(r'layers\.\d+\.ln2.weight$')
+            is_ln1or2 = re.compile(r'layers\.\d+\.ln[12].weight$')
+            ln_wants_lin: dict[str, str] = {
+                **{k: k.replace('ln1', 'attn.qkv_proj') for k, *_ in keys if re.search(is_ln1, k)},
+                **{k: k.replace('ln2', 'ffn.ff_in') for k, *_ in keys if re.search(is_ln2, k)},
+            }
+            lin_wants_ln: dict[str, str] = {v: k for k, v in ln_wants_lin.items()}
+            wants_norm_fusion: set[str] = ln_wants_lin.keys() | lin_wants_ln.keys()
+        else:
+            wants_norm_fusion: set[str] = {}
 
         pending_fusion: dict[str, AcceptFusion] = {}
 
@@ -125,10 +128,10 @@ class FusingDeserializer(TensorDeserializer):
             s_name: str,
             scale: FloatTensor,
         ) -> None:
-            fuse_norm_scale(w, scale, scale_dtype=scale_dtype)
+            fuse_norm_scale(w, scale, scale_via_f32=fuse_norms_via_f32)
             w_mod.register_parameter(w_attr, w)
-            wants_fusion.remove(s_name)
-            wants_fusion.remove(w_name)
+            wants_norm_fusion.remove(s_name)
+            wants_norm_fusion.remove(w_name)
 
         tensor_ct = len(keys)
 
@@ -166,7 +169,7 @@ class FusingDeserializer(TensorDeserializer):
                 module: torch.nn.Module = modules[obj_path]
 
                 if entry.type is param_type:
-                    if name in wants_fusion:
+                    if name in wants_norm_fusion:
                         if re.search(is_ln1or2, name):
                             counterpart_dict: dict[str, str] = ln_wants_lin
                             fuse_kwargs = { 's_name': name, 'scale': tensor }
@@ -185,7 +188,7 @@ class FusingDeserializer(TensorDeserializer):
                     module.register_buffer(attr, tensor)
 
         self._file.close()
-        assert not wants_fusion, f"Unfused: {wants_fusion}"
+        assert not wants_norm_fusion, f"Unfused: {wants_norm_fusion}"
         return tensor_ct
 
     

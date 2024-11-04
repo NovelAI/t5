@@ -193,9 +193,9 @@ class T5DecoderLayer(nn.Module):
         self.self_attn = T5DecoderSelfAttention(config=config)
         self.cross_attn = T5CrossAttention(config=config)
         ffn_factory = get_ffn_factory(config.ffn_type)
-        self.ln1 = RMSNormCast(config.hidden_dim, eps=config.eps, dtype=config.norm_weight_dtype)
-        self.ln2 = RMSNormCast(config.hidden_dim, eps=config.eps, dtype=config.norm_weight_dtype)
-        self.ln3 = RMSNormCast(config.hidden_dim, eps=config.eps, dtype=config.norm_weight_dtype)
+        self.ln1 = RMSNormCast(config.hidden_dim, eps=config.eps, dtype=config.norm_weight_dtype, elementwise_affine=config.elementwise_affine)
+        self.ln2 = RMSNormCast(config.hidden_dim, eps=config.eps, dtype=config.norm_weight_dtype, elementwise_affine=config.elementwise_affine)
+        self.ln3 = RMSNormCast(config.hidden_dim, eps=config.eps, dtype=config.norm_weight_dtype, elementwise_affine=config.elementwise_affine)
         self.ffn = ffn_factory(config)
         self.dropout = nn.Dropout(config.dropout)
 
@@ -254,7 +254,7 @@ class T5DecoderStack(nn.Module):
         self.relative_attention_bias = T5RelativeAttentionBias(config, bidirectional=False)
         self.dropout = nn.Dropout(config.dropout)
         self.layers = nn.ModuleList([T5DecoderLayer(config) for _ in range(config.num_layers)])
-        self.ln = RMSNormCast(config.hidden_dim, eps=config.eps, dtype=config.norm_weight_dtype)
+        self.ln = RMSNormCast(config.hidden_dim, eps=config.eps, dtype=config.norm_weight_dtype, elementwise_affine=config.elementwise_affine)
         # we must calculate this at init, and not later, because FSDP may shard the params
         self.param_count = emb_param_count = 0
         for p in self.parameters():

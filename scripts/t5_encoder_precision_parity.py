@@ -65,12 +65,15 @@ class EncAndConfig(NamedTuple):
 def get_model(
     dir: Path,
     dtype: Optional[torch.dtype] = None,
+    fuse_norm_scales = False,
+    norm_fusion_via_f32 = False,
     enc_attn_out_scales: Optional[list[float]] = None,
     enc_ffn_out_scales: Optional[list[float]] = None,
 ) -> EncAndConfig:
     with open(dir / 'config.json', 'r') as f:
         conf_dict: dict[str, Any] = json.load(f)
     config: T5Config = T5Config.model_validate(conf_dict)
+    config.elementwise_affine = not fuse_norm_scales
 
     with torch.device('meta'):
         enc: T5EncoderStack = T5EncoderStack(config).eval()
@@ -79,7 +82,8 @@ def get_model(
         deserializer = FusingDeserializer(dir / 'enc.tensors', lazy_load=True, dtype=dtype)
         deserializer.load_with_fusions(
             enc,
-            norm_fusion_via_f32=True,
+            fuse_norm_scales=fuse_norm_scales,
+            norm_fusion_via_f32=norm_fusion_via_f32,
             enc_attn_out_scales=enc_attn_out_scales,
             enc_ffn_out_scales=enc_ffn_out_scales,
         )
@@ -187,6 +191,8 @@ def main():
         f16_enc, f16_config = get_model(
             f16_dir,
             dtype=dtype,
+            fuse_norm_scales=True,
+            norm_fusion_via_f32=True,
             enc_attn_out_scales=attn_out_scale_dict[ckpt],
             enc_ffn_out_scales=ffn_out_scale_dict[ckpt],
         )

@@ -81,7 +81,7 @@ class FusingDeserializer(TensorDeserializer):
         self,
         m: T5 | T5EncoderStack,
         norm_fusion_via_f32 = False,
-        fuse_norm_scales = True,
+        fuse_norm_scales = False,
         enc_attn_out_scales: Optional[list[float]] = None,
         enc_ffn_out_scales: Optional[list[float]] = None,
         verify_hash: Optional[bool] = None,

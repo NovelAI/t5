@@ -94,11 +94,14 @@ class T5Config(BaseModel):
     pad_token_id: int = 0
     decoder_start_token_id: int = 0
     label_ignore_index: int = -100
+
     pos_emb_per_layer: bool = False
     """
     True = UMT5-style (position embedding, per layer)
     False = T5-style (one position embedding, shared by all layers)
     """
+
+    elementwise_affine: bool = True
 
     @field_validator("emb_weight_dtype", "linear_weight_dtype", "norm_weight_dtype")
     @classmethod

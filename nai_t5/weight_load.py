@@ -1,5 +1,6 @@
 from nai_t5 import T5, T5EncoderStack, T5Config
-from typing import Optional, OrderedDict, TYPE_CHECKING, Any, Protocol
+from nai_t5.t5_encoder import T5EncoderLayer
+from typing import Optional, OrderedDict, TYPE_CHECKING, Any, Protocol, Literal, Callable
 from dataclasses import dataclass
 from functools import partial
 import contextlib
@@ -63,15 +64,15 @@ class AcceptFusion(Protocol):
 
 def fuse_norm_scale(
     w: FloatTensor,
-    scale: FloatTensor,
+    ln_scale: FloatTensor,
     scale_via_f32 = False,
 ) -> FloatTensor:
-    higher_type: torch.dtype = torch.float32 if scale_via_f32 else torch.promote_types(w.dtype, scale.dtype)
+    higher_type: torch.dtype = torch.float32 if scale_via_f32 else torch.promote_types(w.dtype, ln_scale.dtype)
     scale_diag: FloatTensor = torch.eye(
-        scale.size(-1),
-        device=scale.device,
+        ln_scale.size(-1),
+        device=ln_scale.device,
         dtype=higher_type,
-    ) * scale.type(higher_type).unsqueeze(-1)
+    ) * ln_scale.type(higher_type).unsqueeze(-1)
     matmul_type = torch.float32 if scale_via_f32 else higher_type
     w.copy_(w.type(matmul_type) @ scale_diag.type(matmul_type))
 
@@ -79,21 +80,40 @@ class FusingDeserializer(TensorDeserializer):
     def load_with_fusions(
         self,
         m: T5 | T5EncoderStack,
-        fuse_norms_via_f32 = False,
-        scale_proj_via_f32 = False,
+        norm_fusion_via_f32 = False,
         fuse_norm_scales = True,
-        attn_out_scales: Optional[list[float]] = None,
-        ffn_out_scales: Optional[list[float]] = None,
+        enc_attn_out_scales: Optional[list[float]] = None,
+        enc_ffn_out_scales: Optional[list[float]] = None,
         verify_hash: Optional[bool] = None,
     ) -> int:
         """
         Load weights into a model, fusing or scaling layers as we go.
         """
         config: T5Config = m.config
-        scales: Scales = resolve_scales(
-            attn_out_scales or [1.] * config.num_layers,
-            ffn_out_scales or [1.] * config.num_layers,
+        enc_scales: Scales = resolve_scales(
+            enc_attn_out_scales or [1.] * config.num_layers,
+            enc_ffn_out_scales or [1.] * config.num_layers,
         )
+
+        def receives_residual(obj_path: str, qualifier: Optional[Literal['encoder', 'decoder']] = None) -> bool:
+            prefix = f"{qualifier}." if qualifier else ''
+            return obj_path == f'{prefix}ln' or obj_path.startswith(f'{prefix}layers.')
+
+        match m:
+            case T5():
+                receives_enc_residual: Callable[[str], bool] = partial(receives_residual, qualifier='encoder')
+                enc: T5EncoderStack = m.encoder
+            case T5EncoderStack():
+                receives_enc_residual: Callable[[str], bool] = receives_residual
+                enc: T5EncoderStack = m
+            case _:
+                raise ValueError(f"Unsupported model type: {type(m)}")
+        
+        for layer, ln1_eps_scale, ln2_eps_scale in zip(enc.layers, enc_scales.ln1_eps_scales, enc_scales.ln2_eps_scales):
+            layer: T5EncoderLayer
+            layer.ln1.eps *= ln1_eps_scale
+            layer.ln2.eps *= ln2_eps_scale
+        enc.ln.eps *= enc_scales.final_norm_eps_scale
 
         modules: OrderedDict[str, torch.nn.Module] = OrderedDict()
 
@@ -105,10 +125,12 @@ class FusingDeserializer(TensorDeserializer):
         
         keys: tuple[str, ...] = tuple(self._metadata.keys())
 
+        is_ln1 = re.compile(r'layers\.(\d+)\.ln1\.weight$')
+        is_ln2 = re.compile(r'layers\.(\d+)\.ln2\.weight$')
+        is_o_proj = re.compile(r'layers\.(\d+)\.attn\.o_proj\.weight$')
+        is_ff_out = re.compile(r'layers\.(\d+)\.ffn\.ff_out\.weight$')
         if fuse_norm_scales:
-            is_ln1 = re.compile(r'layers\.\d+\.ln1.weight$')
-            is_ln2 = re.compile(r'layers\.\d+\.ln2.weight$')
-            is_ln1or2 = re.compile(r'layers\.\d+\.ln[12].weight$')
+            is_ln1or2 = re.compile(r'layers\.(\d+)\.ln[12]\.weight$')
             ln_wants_lin: dict[str, str] = {
                 **{k: k.replace('ln1', 'attn.qkv_proj') for k, *_ in keys if re.search(is_ln1, k)},
                 **{k: k.replace('ln2', 'ffn.ff_in') for k, *_ in keys if re.search(is_ln2, k)},
@@ -126,9 +148,13 @@ class FusingDeserializer(TensorDeserializer):
             w_attr: str,
             w: FloatTensor,
             s_name: str,
-            scale: FloatTensor,
+            ln_scale: FloatTensor,
         ) -> None:
-            fuse_norm_scale(w, scale, scale_via_f32=fuse_norms_via_f32)
+            fuse_norm_scale(
+                w=w,
+                ln_scale=ln_scale,
+                scale_via_f32=norm_fusion_via_f32,
+            )
             w_mod.register_parameter(w_attr, w)
             wants_norm_fusion.remove(s_name)
             wants_norm_fusion.remove(w_name)
@@ -167,12 +193,23 @@ class FusingDeserializer(TensorDeserializer):
                 name: str = path.normalize_()
                 obj_path, attr = name.rsplit(".", 1)
                 module: torch.nn.Module = modules[obj_path]
+                
+                residual_scale: Optional[float] = None
+                if receives_enc_residual(obj_path):
+                    if match := re.search(is_o_proj, name):
+                        layer_idx: int = int(match.group(1))
+                        residual_scale: float = enc_scales.attn_out_scales_cp_hat[layer_idx]
+                    elif match := re.search(is_ff_out, name):
+                        layer_idx: int = int(match.group(1))
+                        residual_scale: float = enc_scales.ffn_out_scales_cp_hat[layer_idx]
+                    elif name.endswith('ln.weight'):
+                        residual_scale: float = enc_scales.ffn_out_scales_cp_hat[-1]
 
                 if entry.type is param_type:
                     if name in wants_norm_fusion:
                         if re.search(is_ln1or2, name):
                             counterpart_dict: dict[str, str] = ln_wants_lin
-                            fuse_kwargs = { 's_name': name, 'scale': tensor }
+                            fuse_kwargs = { 's_name': name, 'ln_scale': tensor }
                         else:
                             counterpart_dict: dict[str, str] = lin_wants_ln
                             fuse_kwargs = { 'w_mod': module, 'w_name': name, 'w_attr': attr, 'w': tensor }
@@ -183,6 +220,8 @@ class FusingDeserializer(TensorDeserializer):
                             counterpart: str = counterpart_dict[name]
                             pending_fusion[counterpart] = partial(fuse_me, **fuse_kwargs)
                     else:
+                        if residual_scale is not None and residual_scale != 1:
+                            tensor.mul_(residual_scale)
                         module.register_parameter(attr, tensor)
                 elif entry.type is buffer_type:
                     module.register_buffer(attr, tensor)

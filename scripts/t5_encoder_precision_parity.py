@@ -15,6 +15,7 @@ from sentencepiece import SentencePieceProcessor
 from nai_t5 import T5Config, T5EncoderStack
 from nai_t5.t5_common import RMSNormCast
 from nai_t5.t5_encoder import T5EncoderLayer
+from nai_t5.weight_load import FusingDeserializer
 
 from torch import Tensor
 from typing import Optional
@@ -61,7 +62,12 @@ class EncAndConfig(NamedTuple):
     conf: T5Config
 
 
-def get_model(dir: Path, dtype: Optional[torch.dtype] = None) -> EncAndConfig:
+def get_model(
+    dir: Path,
+    dtype: Optional[torch.dtype] = None,
+    enc_attn_out_scales: Optional[list[float]] = None,
+    enc_ffn_out_scales: Optional[list[float]] = None,
+) -> EncAndConfig:
     with open(dir / 'config.json', 'r') as f:
         conf_dict: dict[str, Any] = json.load(f)
     config: T5Config = T5Config.model_validate(conf_dict)
@@ -69,8 +75,17 @@ def get_model(dir: Path, dtype: Optional[torch.dtype] = None) -> EncAndConfig:
     with torch.device('meta'):
         enc: T5EncoderStack = T5EncoderStack(config).eval()
 
-    deserializer = TensorDeserializer(dir / 'enc.tensors', lazy_load=True, dtype=dtype)
-    deserializer.load_into_module(enc)
+    if enc_ffn_out_scales is not None or enc_attn_out_scales is not None:
+        deserializer = FusingDeserializer(dir / 'enc.tensors', lazy_load=True, dtype=dtype)
+        deserializer.load_with_fusions(
+            enc,
+            norm_fusion_via_f32=True,
+            enc_attn_out_scales=enc_attn_out_scales,
+            enc_ffn_out_scales=enc_ffn_out_scales,
+        )
+    else:
+        deserializer = TensorDeserializer(dir / 'enc.tensors', lazy_load=True, dtype=dtype)
+        deserializer.load_into_module(enc)
     deserializer.close()
     return EncAndConfig(enc, config)
 
@@ -105,10 +120,25 @@ class VoidList(list[T]):
     def append(self, _: T) -> None:
         pass
 
+ffn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
+    # 8 layers
+    Checkpoint.T5v1_1Small: [*[1]*6, 1/8, 1],
+    # 24 layers
+    Checkpoint.T5v1_1XL: [*[1]*4, 1/8, *[1]*19],
+    # 24 layers
+    Checkpoint.T5v1_1XXL: [*[1]*10, 1/4, *[1]*13],
+}
+
+attn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
+    Checkpoint.T5v1_1Small: None,
+    Checkpoint.T5v1_1XL: None,
+    Checkpoint.T5v1_1XXL: None,
+}
+
 def main():
     device = torch.device("cuda")
 
-    ckpt = Checkpoint.T5v1_1XXL
+    ckpt = Checkpoint.T5v1_1XL
     match ckpt:
         case Checkpoint.T5v1_1Small:
             f32_needs_cast = f16_needs_cast = bf16_needs_cast = False
@@ -154,7 +184,12 @@ def main():
         f32_enc, f32_config = get_model(f32_dir, dtype=dtype)
     if f16_enabled := True:
         dtype: Optional[torch.dtype] = torch.float16 if f16_needs_cast else None
-        f16_enc, f16_config = get_model(f16_dir, dtype=dtype)
+        f16_enc, f16_config = get_model(
+            f16_dir,
+            dtype=dtype,
+            enc_attn_out_scales=attn_out_scale_dict[ckpt],
+            enc_ffn_out_scales=ffn_out_scale_dict[ckpt],
+        )
     if bf16_enabled := False or (bf16_weight_donor := False):
         bf16_weight_donor = True
         dtype: Optional[torch.dtype] = torch.bfloat16 if bf16_needs_cast else None
@@ -326,22 +361,17 @@ def main():
     latter_ffn_in_smallers: list[float] = [1, 1]
     ffn_in_smallers: list[float] = [*[1]*(f16_config.num_layers-len(latter_ffn_in_smallers)), *latter_ffn_in_smallers]
 
-    match ckpt:
-        case Checkpoint.T5v1_1Small:
-            attn_out_scales = [1]*f16_config.num_layers
-            ffn_out_scales = [*[1]*6, 1/8, 1]
-        case Checkpoint.T5v1_1XL:
-            # 24 layers
-            attn_out_scales = [1]*f16_config.num_layers
-            ffn_out_scales = [*[1]*4, 1/8, *[1]*19]
-        case Checkpoint.T5v1_1XXL:
-            # 24 layers
-            attn_out_scales = [1]*f16_config.num_layers
-            ffn_out_scales = [*[1]*10, 1/4, *[1]*13]
-        case _:
-            print(f'WARN: no f16 scaling known for {ckpt}')
-            attn_out_scales = [1]*f16_config.num_layers
-            ffn_out_scales = [1]*f16_config.num_layers
+    if ckpt in ffn_out_scale_dict:
+        ffn_out_scales: list[float] = ffn_out_scale_dict[ckpt] or [1]*f16_config.num_layers
+    else:
+        print(f'WARN: no f16 ffn_out scaling known for {ckpt}')
+        ffn_out_scales = [1]*f16_config.num_layers
+
+    if ckpt in attn_out_scale_dict:
+        attn_out_scales: list[float] = attn_out_scale_dict[ckpt] or [1]*f16_config.num_layers
+    else:
+        print(f'WARN: no f16 ffn_out scaling known for {ckpt}')
+        attn_out_scales = [1]*f16_config.num_layers
 
     attn_out_scales: FloatTensor = torch.tensor(attn_out_scales, dtype=torch.float32)
     attn_out_scales_cp: FloatTensor = attn_out_scales.cumprod(-1)

@@ -109,10 +109,14 @@ class FusingDeserializer(TensorDeserializer):
             case _:
                 raise ValueError(f"Unsupported model type: {type(m)}")
         
-        for layer, ln1_eps_scale, ln2_eps_scale in zip(enc.layers, enc_scales.ln1_eps_scales, enc_scales.ln2_eps_scales):
+        for layer, ln1_eps_scale, ln2_eps_scale, ln1_residual_scale, ln2_residual_scale in zip(
+            enc.layers, enc_scales.ln1_eps_scales, enc_scales.ln2_eps_scales, enc_scales.attn_out_scales, enc_scales.ffn_out_scales,
+        ):
             layer: T5EncoderLayer
             layer.ln1.eps *= ln1_eps_scale
             layer.ln2.eps *= ln2_eps_scale
+            layer.ln1.residual_scale = ln1_residual_scale
+            layer.ln2.residual_scale = ln2_residual_scale
         enc.ln.eps *= enc_scales.final_norm_eps_scale
 
         modules: OrderedDict[str, torch.nn.Module] = OrderedDict()

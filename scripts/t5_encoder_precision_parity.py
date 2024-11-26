@@ -28,7 +28,7 @@ def fmt_matrix_norm(t: Tensor) -> str:
         return f'avg {t.mean().item():.2f}'
     return str(t)
 def stats(t: Tensor, label: Optional[str] = None) -> str:
-    return ' '.join((str(val) for val in (f'{str(tuple(t.shape)):14s}', f"{str(t.dtype).removeprefix('torch.'):8s}", f'σ={t.std().item():g}', f'μ={t.mean().item():.2f}', f'norm={fmt_matrix_norm(matrix_norm(t.float(), ord=2))}', f'absmax={t.abs().max().item():g}', label or '')))
+    return ' '.join((str(val) for val in (f'{str(tuple(t.shape)):14s}', f"{str(t.dtype).removeprefix('torch.'):8s}", f'σ={t.std().item():g}', f'μ={t.mean().item():.2f}', f'norm={"N/A" if t.ndim < 2 else fmt_matrix_norm(matrix_norm(t.float(), ord=2))}', f'absmax={t.abs().max().item():g}', label or '')))
 def stat(t: Tensor, label: Optional[str] = None) -> None:
     print(stats(t, label))
 

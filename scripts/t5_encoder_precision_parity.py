@@ -173,6 +173,8 @@ def main():
         case _:
             raise ValueError(f'unknown checkpoint: {ckpt}')
 
+    do_legacy_scaling = True
+
     do_autocast = False
     f32_enc: Optional[T5EncoderStack] = None
     f16_enc: Optional[T5EncoderStack] = None
@@ -188,13 +190,16 @@ def main():
         f32_enc, f32_config = get_model(f32_dir, dtype=dtype)
     if f16_enabled := True:
         dtype: Optional[torch.dtype] = torch.float16 if f16_needs_cast else None
+        scaling_kwargs = {} if do_legacy_scaling else {
+            'fuse_norm_scales': True,
+            'norm_fusion_via_f32': True,
+            'enc_attn_out_scales': attn_out_scale_dict[ckpt],
+            'enc_ffn_out_scales': ffn_out_scale_dict[ckpt],
+        }
         f16_enc, f16_config = get_model(
             f16_dir,
             dtype=dtype,
-            fuse_norm_scales=True,
-            norm_fusion_via_f32=True,
-            enc_attn_out_scales=attn_out_scale_dict[ckpt],
-            enc_ffn_out_scales=ffn_out_scale_dict[ckpt],
+            **scaling_kwargs,
         )
     if bf16_enabled := False or (bf16_weight_donor := False):
         bf16_weight_donor = True
@@ -360,155 +365,157 @@ def main():
         input_out[:len(seq)].copy_(torch.tensor(seq[:ctx_len], dtype=torch.long))
     input_ids = input_ids.to(device)
     mask: BoolTensor = input_ids != tokenizer.pad_id()
-    q_smaller = 1
-    v_smaller = 1
 
-    latter_ffn_in_smallers: list[float] = [1/2, 1/8]
-    latter_ffn_in_smallers: list[float] = [1, 1]
-    ffn_in_smallers: list[float] = [*[1]*(f16_config.num_layers-len(latter_ffn_in_smallers)), *latter_ffn_in_smallers]
+    if do_legacy_scaling:
+        q_smaller = 1
+        v_smaller = 1
 
-    if ckpt in ffn_out_scale_dict:
-        ffn_out_scales: list[float] = ffn_out_scale_dict[ckpt] or [1]*f16_config.num_layers
-    else:
-        print(f'WARN: no f16 ffn_out scaling known for {ckpt}')
-        ffn_out_scales = [1]*f16_config.num_layers
+        latter_ffn_in_smallers: list[float] = [1/2, 1/8]
+        latter_ffn_in_smallers: list[float] = [1, 1]
+        ffn_in_smallers: list[float] = [*[1]*(f16_config.num_layers-len(latter_ffn_in_smallers)), *latter_ffn_in_smallers]
 
-    if ckpt in attn_out_scale_dict:
-        attn_out_scales: list[float] = attn_out_scale_dict[ckpt] or [1]*f16_config.num_layers
-    else:
-        print(f'WARN: no f16 ffn_out scaling known for {ckpt}')
-        attn_out_scales = [1]*f16_config.num_layers
+        if ckpt in ffn_out_scale_dict:
+            ffn_out_scales: list[float] = ffn_out_scale_dict[ckpt] or [1]*f16_config.num_layers
+        else:
+            print(f'WARN: no f16 ffn_out scaling known for {ckpt}')
+            ffn_out_scales = [1]*f16_config.num_layers
 
-    attn_out_scales: FloatTensor = torch.tensor(attn_out_scales, dtype=torch.float32)
-    attn_out_scales_cp: FloatTensor = attn_out_scales.cumprod(-1)
-    
-    ffn_out_scales: FloatTensor = torch.tensor(ffn_out_scales, dtype=torch.float32)
-    ffn_out_scales_cp: FloatTensor = ffn_out_scales.cumprod(-1)
+        if ckpt in attn_out_scale_dict:
+            attn_out_scales: list[float] = attn_out_scale_dict[ckpt] or [1]*f16_config.num_layers
+        else:
+            print(f'WARN: no f16 ffn_out scaling known for {ckpt}')
+            attn_out_scales = [1]*f16_config.num_layers
 
-    attn_out_scales_cp_hat = attn_out_scales_cp.clone()
-    attn_out_scales_cp_hat[1:].mul_(ffn_out_scales_cp[:-1])
+        attn_out_scales: FloatTensor = torch.tensor(attn_out_scales, dtype=torch.float32)
+        attn_out_scales_cp: FloatTensor = attn_out_scales.cumprod(-1)
+        
+        ffn_out_scales: FloatTensor = torch.tensor(ffn_out_scales, dtype=torch.float32)
+        ffn_out_scales_cp: FloatTensor = ffn_out_scales.cumprod(-1)
 
-    ffn_out_scales_cp_hat = ffn_out_scales_cp.clone()
-    ffn_out_scales_cp_hat.mul_(attn_out_scales_cp)
+        attn_out_scales_cp_hat = attn_out_scales_cp.clone()
+        attn_out_scales_cp_hat[1:].mul_(ffn_out_scales_cp[:-1])
 
-    ln1_eps_scales = ffn_out_scales_cp_hat.roll(1, dims=-1)
-    ln1_eps_scales[0].copy_(1)
+        ffn_out_scales_cp_hat = ffn_out_scales_cp.clone()
+        ffn_out_scales_cp_hat.mul_(attn_out_scales_cp)
 
-    ln2_eps_scales = attn_out_scales_cp_hat
+        ln1_eps_scales = ffn_out_scales_cp_hat.roll(1, dims=-1)
+        ln1_eps_scales[0].copy_(1)
 
-    final_norm_eps_scale = ffn_out_scales_cp_hat[-1].item()
+        ln2_eps_scales = attn_out_scales_cp_hat
 
-    donor: T5EncoderStack = f32_enc if f32_enabled else (bf16_enc if bf16_enabled else f16_enc)
+        final_norm_eps_scale = ffn_out_scales_cp_hat[-1].item()
 
-    ffn_in_smaller_via_residual = False
-    # print('q_smaller:', q_smaller)
-    # print('v_smaller:', v_smaller)
-    # print('ffn_in_smallers:', ffn_in_smallers)
-    # print('ffn_in_smaller_via_residual:', ffn_in_smaller_via_residual)
-    print('attn_out_scales:', attn_out_scales)
-    print('ffn_out_scales:', ffn_out_scales)
-    print('attn_out_scales_cp_hat:', attn_out_scales_cp_hat)
-    print('ffn_out_scales_cp_hat:', ffn_out_scales_cp_hat)
-    print('ln1_eps_scales:', ln1_eps_scales)
-    print('ln2_eps_scales:', ln2_eps_scales)
-    with inference_mode():
-        for layer_ix, (
-            f16_layer,
-            f32_layer,
-            ffn_in_smaller,
-            attn_out_scale,
-            attn_out_scale_cp,
-            ffn_out_scale,
-            ffn_out_scale_cp,
-            ln1_eps_scale,
-            ln2_eps_scale,
-        ) in enumerate(zip(
-            f16_enc.layers,
-            donor.layers,
-            ffn_in_smallers,
-            attn_out_scales.tolist(),
-            attn_out_scales_cp_hat.tolist(),
-            ffn_out_scales.tolist(),
-            ffn_out_scales_cp_hat.tolist(),
-            ln1_eps_scales.tolist(),
-            ln2_eps_scales.tolist(),
-        )):
-            f16_layer: T5EncoderLayer
-            f32_layer: T5EncoderLayer
-            q16, k16, v16 = f16_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
-            q32, k32, v32 = f32_layer.attn.qkv_proj.weight.float().chunk(3, dim=-2)
-            o16 = f16_layer.attn.o_proj.weight
-            o32 = f32_layer.attn.o_proj.weight.float()
-            if q_smaller != 1:
-                q16.copy_(q32.div(q_smaller).type_as(q16))
-                k16.copy_(k32.mul(q_smaller).type_as(k16))
-            if v_smaller != 1:
-                v16.copy_(v32.div(v_smaller).type_as(v16))
-                o16.copy_(o32.mul(v_smaller).type_as(o16))
+        donor: T5EncoderStack = f32_enc if f32_enabled else (bf16_enc if bf16_enabled else f16_enc)
 
-            _, ungated16 = f16_layer.ffn.ff_in.weight.chunk(2, dim=-2)
-            _, ungated32 = f32_layer.ffn.ff_in.weight.float().chunk(2, dim=-2)
-            out16 = f16_layer.ffn.ff_out.weight
-            out32 = f32_layer.ffn.ff_out.weight.float()
-            if layer_ix == 6:
-                pass
-            if attn_out_scale != 1:
-                f16_layer.ln1.residual_scale = attn_out_scale
-            if attn_out_scale_cp != 1:
-                o16.copy_(o32.mul(attn_out_scale_cp).type_as(o16))
-            if ln1_eps_scale != 1:
-                f16_layer.ln1.eps *= ln1_eps_scale
-
-            if ffn_out_scale != 1:
-                f16_layer.ln2.residual_scale = ffn_out_scale
-            if ffn_out_scale_cp != 1:
-                out16.copy_(out32.mul(ffn_out_scale_cp).type_as(out16))
-            if ln2_eps_scale != 1:
-                f16_layer.ln2.eps *= ln2_eps_scale
-            # if ffn_in_smaller != 1:
-            #     ungated16.copy_(ungated32.div(ffn_in_smaller).type_as(ungated16))
-            #     if ffn_in_smaller_via_residual:
-            #         f16_layer.register_buffer('residual_scale', out16.new_tensor(ffn_in_smaller, requires_grad=False), persistent=True)
-            #         if layer_ix == f16_config.num_layers - 1:
-            #             next_norm: RMSNormCast = f16_enc.ln
-            #         else:
-            #             next_layer: T5EncoderLayer = f16_enc.layers[layer_ix + 1]
-            #             next_norm: RMSNormCast = next_layer.ln1
-            #         next_norm.eps /= ffn_in_smaller
-            #     else:
-            #         out16.copy_(out32.mul(ffn_in_smaller).type_as(out16))
-        if final_norm_eps_scale != 1:
-            f16_enc.ln.eps *= final_norm_eps_scale
-    
-    fuse_norms = True
-    print('fuse_norms:', fuse_norms)
-    if fuse_norms:
+        ffn_in_smaller_via_residual = False
+        # print('q_smaller:', q_smaller)
+        # print('v_smaller:', v_smaller)
+        # print('ffn_in_smallers:', ffn_in_smallers)
+        # print('ffn_in_smaller_via_residual:', ffn_in_smaller_via_residual)
+        print('attn_out_scales:', attn_out_scales)
+        print('ffn_out_scales:', ffn_out_scales)
+        print('attn_out_scales_cp_hat:', attn_out_scales_cp_hat)
+        print('ffn_out_scales_cp_hat:', ffn_out_scales_cp_hat)
+        print('ln1_eps_scales:', ln1_eps_scales)
+        print('ln2_eps_scales:', ln2_eps_scales)
         with inference_mode():
-            for f16_layer, f32_layer in zip(f16_enc.layers, donor.layers):
+            for layer_ix, (
+                f16_layer,
+                f32_layer,
+                ffn_in_smaller,
+                attn_out_scale,
+                attn_out_scale_cp,
+                ffn_out_scale,
+                ffn_out_scale_cp,
+                ln1_eps_scale,
+                ln2_eps_scale,
+            ) in enumerate(zip(
+                f16_enc.layers,
+                donor.layers,
+                ffn_in_smallers,
+                attn_out_scales.tolist(),
+                attn_out_scales_cp_hat.tolist(),
+                ffn_out_scales.tolist(),
+                ffn_out_scales_cp_hat.tolist(),
+                ln1_eps_scales.tolist(),
+                ln2_eps_scales.tolist(),
+            )):
                 f16_layer: T5EncoderLayer
                 f32_layer: T5EncoderLayer
+                q16, k16, v16 = f16_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
+                q32, k32, v32 = f32_layer.attn.qkv_proj.weight.float().chunk(3, dim=-2)
+                o16 = f16_layer.attn.o_proj.weight
+                o32 = f32_layer.attn.o_proj.weight.float()
+                if q_smaller != 1:
+                    q16.copy_(q32.div(q_smaller).type_as(q16))
+                    k16.copy_(k32.mul(q_smaller).type_as(k16))
+                if v_smaller != 1:
+                    v16.copy_(v32.div(v_smaller).type_as(v16))
+                    o16.copy_(o32.mul(v_smaller).type_as(o16))
 
-                ln1, scale1 = extract_norm_scales(f32_layer.ln1)
-                ln1.residual_scale = f16_layer.ln1.residual_scale
-                setattr(f16_layer, 'ln1', ln1)
+                _, ungated16 = f16_layer.ffn.ff_in.weight.chunk(2, dim=-2)
+                _, ungated32 = f32_layer.ffn.ff_in.weight.float().chunk(2, dim=-2)
+                out16 = f16_layer.ffn.ff_out.weight
+                out32 = f32_layer.ffn.ff_out.weight.float()
+                if layer_ix == 6:
+                    pass
+                if attn_out_scale != 1:
+                    f16_layer.ln1.residual_scale = attn_out_scale
+                if attn_out_scale_cp != 1:
+                    o16.copy_(o32.mul(attn_out_scale_cp).type_as(o16))
+                if ln1_eps_scale != 1:
+                    f16_layer.ln1.eps *= ln1_eps_scale
 
-                # q16, k16, v16 = f16_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
-                # q32, k32, v32 = f32_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
-                qkv_16 = f16_layer.attn.qkv_proj.weight
-                qkv_32 = f32_layer.attn.qkv_proj.weight.float()
+                if ffn_out_scale != 1:
+                    f16_layer.ln2.residual_scale = ffn_out_scale
+                if ffn_out_scale_cp != 1:
+                    out16.copy_(out32.mul(ffn_out_scale_cp).type_as(out16))
+                if ln2_eps_scale != 1:
+                    f16_layer.ln2.eps *= ln2_eps_scale
+                # if ffn_in_smaller != 1:
+                #     ungated16.copy_(ungated32.div(ffn_in_smaller).type_as(ungated16))
+                #     if ffn_in_smaller_via_residual:
+                #         f16_layer.register_buffer('residual_scale', out16.new_tensor(ffn_in_smaller, requires_grad=False), persistent=True)
+                #         if layer_ix == f16_config.num_layers - 1:
+                #             next_norm: RMSNormCast = f16_enc.ln
+                #         else:
+                #             next_layer: T5EncoderLayer = f16_enc.layers[layer_ix + 1]
+                #             next_norm: RMSNormCast = next_layer.ln1
+                #         next_norm.eps /= ffn_in_smaller
+                #     else:
+                #         out16.copy_(out32.mul(ffn_in_smaller).type_as(out16))
+            if final_norm_eps_scale != 1:
+                f16_enc.ln.eps *= final_norm_eps_scale
+        
+        fuse_norms = True
+        print('fuse_norms:', fuse_norms)
+        if fuse_norms:
+            with inference_mode():
+                for f16_layer, f32_layer in zip(f16_enc.layers, donor.layers):
+                    f16_layer: T5EncoderLayer
+                    f32_layer: T5EncoderLayer
 
-                scale1_diag: FloatTensor = torch.eye(scale1.size(-1), device=device, dtype=torch.float32) * scale1.float().unsqueeze(-1)
-                # q16.copy_((q32 @ scale1_diag).type_as(q16))
-                qkv_16.copy_((qkv_32 @ scale1_diag).type_as(qkv_16))
+                    ln1, scale1 = extract_norm_scales(f32_layer.ln1)
+                    ln1.residual_scale = f16_layer.ln1.residual_scale
+                    setattr(f16_layer, 'ln1', ln1)
 
-                # TODO: enable this later, after we work around the NaN that it introduces
-                ln2, scale2 = extract_norm_scales(f32_layer.ln2)
-                ln2.residual_scale = f16_layer.ln2.residual_scale
-                setattr(f16_layer, 'ln2', ln2)
-                ff_in_16 = f16_layer.ffn.ff_in.weight
-                ff_in_32 = f32_layer.ffn.ff_in.weight.float()
-                scale2_diag: FloatTensor = torch.eye(scale2.size(-1), device=device, dtype=torch.float32) * scale2.float().unsqueeze(-1)
-                ff_in_16.copy_((ff_in_32 @ scale2_diag).type_as(ff_in_16))
+                    # q16, k16, v16 = f16_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
+                    # q32, k32, v32 = f32_layer.attn.qkv_proj.weight.chunk(3, dim=-2)
+                    qkv_16 = f16_layer.attn.qkv_proj.weight
+                    qkv_32 = f32_layer.attn.qkv_proj.weight.float()
+
+                    scale1_diag: FloatTensor = torch.eye(scale1.size(-1), device=device, dtype=torch.float32) * scale1.float().unsqueeze(-1)
+                    # q16.copy_((q32 @ scale1_diag).type_as(q16))
+                    qkv_16.copy_((qkv_32 @ scale1_diag).type_as(qkv_16))
+
+                    # TODO: enable this later, after we work around the NaN that it introduces
+                    ln2, scale2 = extract_norm_scales(f32_layer.ln2)
+                    ln2.residual_scale = f16_layer.ln2.residual_scale
+                    setattr(f16_layer, 'ln2', ln2)
+                    ff_in_16 = f16_layer.ffn.ff_in.weight
+                    ff_in_32 = f32_layer.ffn.ff_in.weight.float()
+                    scale2_diag: FloatTensor = torch.eye(scale2.size(-1), device=device, dtype=torch.float32) * scale2.float().unsqueeze(-1)
+                    ff_in_16.copy_((ff_in_32 @ scale2_diag).type_as(ff_in_16))
 
     seed = 42
     with (

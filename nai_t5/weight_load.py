@@ -115,6 +115,7 @@ class FusingDeserializer(TensorDeserializer):
             layer: T5EncoderLayer
             layer.ln1.eps *= ln1_eps_scale
             layer.ln2.eps *= ln2_eps_scale
+            # make residual smaller at the same time as we make a layer output smaller
             layer.ln1.residual_scale = ln1_residual_scale
             layer.ln2.residual_scale = ln2_residual_scale
         enc.ln.eps *= enc_scales.final_norm_eps_scale
@@ -198,14 +199,15 @@ class FusingDeserializer(TensorDeserializer):
                 obj_path, attr = name.rsplit(".", 1)
                 module: torch.nn.Module = modules[obj_path]
                 
-                residual_scale: Optional[float] = None
+                # make layer outputs smaller in proportion to how much smaller we made their corresponding residual
+                out_scale: Optional[float] = None
                 if receives_enc_residual(obj_path):
                     if match := re.search(is_o_proj, name):
                         layer_idx: int = int(match.group(1))
-                        residual_scale: float = enc_scales.attn_out_scales_cp_hat[layer_idx]
+                        out_scale: float = enc_scales.attn_out_scales_cp_hat[layer_idx]
                     elif match := re.search(is_ff_out, name):
                         layer_idx: int = int(match.group(1))
-                        residual_scale: float = enc_scales.ffn_out_scales_cp_hat[layer_idx]
+                        out_scale: float = enc_scales.ffn_out_scales_cp_hat[layer_idx]
 
                 if entry.type is param_type:
                     if name in wants_norm_fusion:
@@ -222,8 +224,8 @@ class FusingDeserializer(TensorDeserializer):
                             counterpart: str = counterpart_dict[name]
                             pending_fusion[counterpart] = partial(fuse_me, **fuse_kwargs)
                     else:
-                        if residual_scale is not None and residual_scale != 1:
-                            tensor.mul_(residual_scale)
+                        if out_scale is not None and out_scale != 1:
+                            tensor.mul_(out_scale)
                         module.register_parameter(attr, tensor)
                 elif entry.type is buffer_type:
                     module.register_buffer(attr, tensor)

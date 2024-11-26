@@ -206,8 +206,6 @@ class FusingDeserializer(TensorDeserializer):
                     elif match := re.search(is_ff_out, name):
                         layer_idx: int = int(match.group(1))
                         residual_scale: float = enc_scales.ffn_out_scales_cp_hat[layer_idx]
-                    elif name.endswith('ln.weight'):
-                        residual_scale: float = enc_scales.ffn_out_scales_cp_hat[-1]
 
                 if entry.type is param_type:
                     if name in wants_norm_fusion:

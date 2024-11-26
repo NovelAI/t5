@@ -173,7 +173,8 @@ def main():
         case _:
             raise ValueError(f'unknown checkpoint: {ckpt}')
 
-    do_legacy_scaling = True
+    do_legacy_scaling = False
+    fuse_norms = True
 
     do_autocast = False
     f32_enc: Optional[T5EncoderStack] = None
@@ -191,7 +192,7 @@ def main():
     if f16_enabled := True:
         dtype: Optional[torch.dtype] = torch.float16 if f16_needs_cast else None
         scaling_kwargs = {} if do_legacy_scaling else {
-            'fuse_norm_scales': True,
+            'fuse_norm_scales': fuse_norms,
             'norm_fusion_via_f32': True,
             'enc_attn_out_scales': attn_out_scale_dict[ckpt],
             'enc_ffn_out_scales': ffn_out_scale_dict[ckpt],
@@ -487,7 +488,6 @@ def main():
             if final_norm_eps_scale != 1:
                 f16_enc.ln.eps *= final_norm_eps_scale
         
-        fuse_norms = True
         print('fuse_norms:', fuse_norms)
         if fuse_norms:
             with inference_mode():

@@ -1,11 +1,11 @@
 import math
-from typing import Optional, Protocol, TYPE_CHECKING, NamedTuple, Any
+from typing import Optional, Callable, Protocol, TYPE_CHECKING, NamedTuple, Any
 from itertools import chain
 from functools import partial
 
 import torch
 from einops import rearrange
-from torch import BoolTensor, FloatTensor, IntTensor, LongTensor, nn
+from torch import BoolTensor, FloatTensor, IntTensor, LongTensor, nn, __version__ as torch_version
 from torch.nn import Linear, Embedding
 from torch.nn.functional import scaled_dot_product_attention
 
@@ -27,6 +27,15 @@ if TYPE_CHECKING:
     from torch.nn.attention.flex_attention import BlockMask
 else:
     BlockMask = _mask_mod_signature = Any
+
+try:
+    from torch.nn.attention.flex_attention import create_block_mask
+    if torch_version >= '2.6.0a0':
+        create_block_mask_c = torch.compile(create_block_mask, dynamic=False, fullgraph=True)
+    else:
+        create_block_mask_c = partial(create_block_mask, _compile=True)
+except ImportError:
+    create_block_mask_c = None
 
 ####
 #### T5 encoder self-attention
@@ -145,7 +154,29 @@ class T5EncoderSelfAttentionFlex(nn.Module):
         return score_mod
 
     @staticmethod
-    def make_mask_mod(mask: BoolTensor) -> MaskMod:
+    def make_mask_mod_compat(mask: BoolTensor) -> MaskMod:
+        """
+        pad queries attend to unmasked keys.
+        this isn't necessary, but it's a convention used by other T5 implementations.
+        will make your outputs in pad positions more comparable to other implementations.
+        """
+        def mask_mod(
+            batch: IntTensor,
+            head: IntTensor,
+            q_idx: IntTensor,
+            kv_idx: IntTensor,
+        ) -> BoolTensor:
+            return mask[batch, kv_idx]
+        return mask_mod
+
+    @staticmethod
+    def make_mask_mod_fast(mask: BoolTensor) -> MaskMod:
+        """
+        pad queries attend to nothing. more sparsity, more speed.
+        rely on flex attention's safe_softmax to output 0-probability
+        attention distributions for pad queries instead of inf (not that
+        downstream code should be reading from these positions anyway).
+        """
         def mask_mod(
             batch: IntTensor,
             head: IntTensor,
@@ -176,7 +207,7 @@ class T5EncoderSelfAttentionFlex(nn.Module):
             score_mod=self.score_mod,
             block_mask=block_mask,
             scale=self.scale,
-            flex_kernel_options=self.config.flex_kernel_options,
+            kernel_options=self.config.flex_kernel_options,
         )
         a = rearrange(a, "batch heads seq head_dim -> batch seq (heads head_dim)")
         o = self.o_proj(a)
@@ -185,6 +216,39 @@ class T5EncoderSelfAttentionFlex(nn.Module):
     def init_weights(self):
         nn.init.normal_(self.qkv_proj.weight, std=1 / math.sqrt(self.config.hidden_dim))
         nn.init.normal_(self.o_proj.weight, std=1 / math.sqrt(self.config.hidden_dim * self.config.num_layers))
+
+class CreateBlockMask(Protocol):
+    @staticmethod
+    def __call__(
+        mask_mod: MaskMod,
+        B: int,
+        H: int,
+        Q_LEN: int,
+        KV_LEN: int,
+    ) -> BlockMask: ...
+
+def make_self_attn_block_mask(
+    mask: BoolTensor,
+    mask_pad_queries=True,
+    create_block_mask: CreateBlockMask = create_block_mask_c,
+) -> BlockMask:
+    from nai_t5.t5_encoder import T5EncoderSelfAttentionFlex
+    seq_len: int = mask.size(-1)
+    make_mask_mod: Callable[[BoolTensor], MaskMod] = (
+        T5EncoderSelfAttentionFlex.make_mask_mod_fast if mask_pad_queries else T5EncoderSelfAttentionFlex.make_mask_mod_compat
+    )
+    mask_mod: MaskMod = make_mask_mod(mask)
+
+    assert callable(create_block_mask), "create_block_mask implementation was not callable"
+
+    block_mask: BlockMask = create_block_mask(
+        mask_mod=mask_mod,
+        B=mask.size(0),
+        H=1, # broadcast over all heads
+        Q_LEN=seq_len,
+        KV_LEN=seq_len,
+    )
+    return block_mask
 
 class EncoderSelfAttentionFactory(Protocol):
     @staticmethod
@@ -263,18 +327,13 @@ class T5EncoderStack(nn.Module):
         self.relative_attention_bias = T5RelativeAttentionBias(config, bidirectional=True)
         match config.attn_impl:
             case T5AttnImpl.SDPA:
-                attn_ctors = [T5EncoderSelfAttention]*config.num_layers
+                attn_ctor = T5EncoderSelfAttention
             case T5AttnImpl.Flex:
-                bias_emb: Embedding = self.relative_attention_bias.bias_emb
-                if config.pos_emb_per_layer:
-                    emb_weights: list[FloatTensor] = bias_emb.weight.chunk(config.num_layers, dim=-1)
-                else:
-                    emb_weights: list[FloatTensor] = [bias_emb.weight]*config.num_layers
-                attn_ctors = [partial(T5EncoderSelfAttentionFlex, emb_weight=emb_weight) for emb_weight in emb_weights]
+                attn_ctor = T5EncoderSelfAttentionFlex
             case _:
                 raise ValueError(f"Unsupported attention implementation: {config.attn_impl}")
         self.dropout = nn.Dropout(config.dropout)
-        self.layers = nn.ModuleList([T5EncoderLayer(config, attn_ctor) for attn_ctor in attn_ctors])
+        self.layers = nn.ModuleList([T5EncoderLayer(config, attn_ctor) for _ in range(config.num_layers)])
         self.ln = RMSNormCast(config.hidden_dim, eps=config.eps, dtype=config.norm_weight_dtype, elementwise_affine=config.elementwise_affine)
         # we must calculate this at init, and not later, because FSDP may shard the params
         self.param_count = emb_param_count = 0
@@ -290,7 +349,7 @@ class T5EncoderStack(nn.Module):
         input_mask: Optional[BoolTensor] = None,
         # SDPA: position_bias can be re-used across invocations; best computed outside
         position_bias: Optional[FloatTensor] = None,
-        # Flex: block_mask creation seems to dislike being inside torch.compile, so I'ma ask you to pass it in
+        # Flex: we externalize BlockMask so that you can manage how create_block_mask is compiled (including it inside the model would require torch 2.6)
         block_mask: Optional[BlockMask] = None,
     ) -> FloatTensor:
         seq_len: int = input_ids.size(-1)

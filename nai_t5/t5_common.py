@@ -1,6 +1,6 @@
 import math
 from enum import Enum
-from typing import Optional, Type, Literal, Dict, NamedTuple
+from typing import Optional, Type, Literal, Dict, Any, NamedTuple
 from pydantic import BaseModel, field_validator, field_serializer
 
 import torch
@@ -88,6 +88,7 @@ class T5Config(BaseModel):
     ffn_type: T5FFNType = T5FFNType.GEGLU
     gelu_approx: GELUApprox = GELUApprox.None_
     attn_impl: T5AttnImpl = T5AttnImpl.SDPA
+    flex_kernel_options: dict[str, Any] = {}
     relative_attention_num_buckets: int = 32
     relative_attention_max_distance: int = 128
     scale_qk: bool = True

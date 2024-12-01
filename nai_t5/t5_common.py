@@ -348,6 +348,8 @@ class RMSNormCast(RMSNorm):
         device: str | torch.device | None = None,
         dtype: torch.dtype = torch.float32,
         residual_scale: Optional[float] = None,
+        # triton norm seems to be slower if you're not compiling the model, but faster if you are
+        use_triton=True,
     ) -> None:
         assert isinstance(normalized_shape, int)
         super().__init__(
@@ -357,6 +359,7 @@ class RMSNormCast(RMSNorm):
             device=device,
             dtype=dtype,
             residual_scale=residual_scale,
+            use_triton=use_triton,
         )
     
     def forward(self, x: FloatTensor, residual: FloatTensor, prenorm=True) -> ActAndResidual | FloatTensor:

@@ -19,6 +19,7 @@ from .t5_common import (
     ActAndResidual,
     flash_attention_flops,
     get_ffn_factory,
+    init_emb,
 )
 from .flex_utils import ScoreMod, MaskMod
 
@@ -213,9 +214,9 @@ class T5EncoderSelfAttentionFlex(nn.Module):
         o = self.o_proj(a)
         return o
 
-    def init_weights(self):
-        nn.init.normal_(self.qkv_proj.weight, std=1 / math.sqrt(self.config.hidden_dim))
-        nn.init.normal_(self.o_proj.weight, std=1 / math.sqrt(self.config.hidden_dim * self.config.num_layers))
+    def init_weights(self, generator: Optional[torch.Generator] = None) -> None:
+        nn.init.normal_(self.qkv_proj.weight, std=1 / math.sqrt(self.config.hidden_dim), generator=generator)
+        nn.init.normal_(self.o_proj.weight, std=1 / math.sqrt(self.config.hidden_dim * self.config.num_layers), generator=generator)
 
 class CreateBlockMask(Protocol):
     @staticmethod
@@ -299,11 +300,11 @@ class T5EncoderLayer(nn.Module):
         x = self.ffn(x)
         return ActAndResidual(self.dropout(x), residual)
 
-    def init_weights(self):
-        self.attn.init_weights()
+    def init_weights(self, generator: Optional[torch.Generator] = None) -> None:
+        self.attn.init_weights(generator)
         self.ln1.reset_parameters()
         self.ln2.reset_parameters()
-        self.ffn.init_weights()
+        self.ffn.init_weights(generator)
 
 
 class T5EncoderStack(nn.Module):
@@ -434,9 +435,10 @@ class T5EncoderStack(nn.Module):
             1, input_ids_len, input_ids_len, self.config.hidden_dim, 1, False, mode="fwd_bwd"
         )
 
-    def init_weights(self):
-        self.vocab_embed.reset_parameters()
-        self.relative_attention_bias.init_weights()
+    def init_weights(self, generator: Optional[torch.Generator] = None) -> None:
+        init_emb(self.vocab_embed, generator=generator)
+        self.relative_attention_bias.init_weights(generator)
         self.ln.reset_parameters()
         for layer in self.layers:
-            layer.init_weights()
+            layer: T5EncoderLayer
+            layer.init_weights(generator)

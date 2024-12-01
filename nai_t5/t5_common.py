@@ -6,7 +6,7 @@ from pydantic import BaseModel, field_validator, field_serializer
 import torch
 from einops import rearrange
 from torch import FloatTensor, LongTensor, Tensor, nn
-from torch.nn import Linear, Embedding
+from torch.nn import Linear, Embedding, init
 from torch.nn.modules.normalization import RMSNorm, _shape_t
 from torch.amp import autocast
 
@@ -231,8 +231,8 @@ class T5RelativeAttentionBias(nn.Module):
         values = values.clone(memory_format=torch.contiguous_format)
         return values
 
-    def init_weights(self):
-        self.bias_emb.reset_parameters()
+    def init_weights(self, generator: Optional[torch.Generator] = None) -> None:
+        init_emb(self.bias_emb, generator=generator)
 
 
 ####
@@ -268,19 +268,17 @@ class T5ReLUFFN(nn.Module):
 
     def forward(self, x: FloatTensor) -> FloatTensor:
         x = self.ff_in(x)
-        # TODO: should we checkpoint the gate, as Arda did?
         x = self.gate(x)
         x = self.dropout(x)
         x = self.ff_out(x)
         return x
 
-    def init_weights(self):
-        nn.init.normal_(self.ff_in.weight, std=1 / math.sqrt(self.config.hidden_dim))
-        nn.init.normal_(self.ff_out.weight, std=1 / math.sqrt(self.config.hidden_dim * self.config.num_layers))
+    def init_weights(self, generator: Optional[torch.Generator] = None) -> None:
+        nn.init.normal_(self.ff_in.weight, std=1 / math.sqrt(self.config.hidden_dim), generator=generator)
+        nn.init.normal_(self.ff_out.weight, std=1 / math.sqrt(self.config.hidden_dim * self.config.num_layers), generator=generator)
 
 
 # implements GEGLU, (T5 v1.1)
-# TODO: consider fusions
 class T5GEGLUFFN(nn.Module):
     ff_in: Linear
     gate: nn.GELU
@@ -308,7 +306,6 @@ class T5GEGLUFFN(nn.Module):
         self.gate = nn.GELU(approximate=config.gelu_approx.value)
         self.config = config
 
-    # TODO: torch.compile
     def forward(self, x: FloatTensor) -> FloatTensor:
         x = self.ff_in(x)
         g, x = torch.chunk(x, 2, dim=-1)
@@ -318,9 +315,9 @@ class T5GEGLUFFN(nn.Module):
         x = self.ff_out(x)
         return x
 
-    def init_weights(self):
-        nn.init.normal_(self.ff_in.weight, std=1 / math.sqrt(self.config.hidden_dim))
-        nn.init.normal_(self.ff_out.weight, std=1 / math.sqrt(self.config.hidden_dim * self.config.num_layers))
+    def init_weights(self, generator: Optional[torch.Generator] = None) -> None:
+        nn.init.normal_(self.ff_in.weight, std=1 / math.sqrt(self.config.hidden_dim), generator=generator)
+        nn.init.normal_(self.ff_out.weight, std=1 / math.sqrt(self.config.hidden_dim * self.config.num_layers), generator=generator)
 
 
 def get_ffn_factory(ffn_type: T5FFNType) -> Type[T5ReLUFFN | T5GEGLUFFN]:
@@ -403,3 +400,13 @@ def flash_attention_flops(
         assert not causal, "we don't know how well attention can take advantage of sparsity in causal cross-attention."
     f = 4 * batch * nheads * q_len * kv_len * headdim // (2 if causal else 1)
     return f if mode == "fwd" else (2.5 * f if mode == "bwd" else 3.5 * f)
+
+
+####
+#### Weight init
+####
+
+
+def init_emb(emb: Embedding, generator: Optional[torch.Generator] = None) -> None:
+    init.normal_(emb.weight, generator=generator)
+    emb._fill_padding_idx_with_zero()

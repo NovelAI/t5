@@ -1,6 +1,7 @@
 import math
 from typing import Optional, NamedTuple, Protocol, overload
 
+import torch
 from torch import BoolTensor, FloatTensor, LongTensor, Tensor, inference_mode, nn
 from torch.nn import Linear
 
@@ -201,7 +202,7 @@ class T5(nn.Module):
 
         return encoder_flos + decoder_flos + lm_head_flos
 
-    def init_weights(self) -> None:
-        nn.init.normal_(self.lm_head.weight, std=1 / math.sqrt(self.config.hidden_dim))
-        self.encoder.init_weights()
-        self.decoder.init_weights()
+    def init_weights(self, generator: Optional[torch.Generator] = None) -> None:
+        nn.init.normal_(self.lm_head.weight, std=1 / math.sqrt(self.config.hidden_dim), generator=generator)
+        self.encoder.init_weights(generator)
+        self.decoder.init_weights(generator)

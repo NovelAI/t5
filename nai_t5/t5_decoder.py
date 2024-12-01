@@ -5,7 +5,6 @@ from einops import rearrange
 import torch
 from torch import BoolTensor, FloatTensor, inference_mode, nn
 from torch.nn import Linear
-from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.functional import scaled_dot_product_attention
 
 from .t5_common import RMSNormCast, T5GEGLUFFN, T5Config, T5RelativeAttentionBias, T5ReLUFFN, flash_attention_flops, get_ffn_factory
@@ -81,10 +80,10 @@ class T5CrossAttention(nn.Module):
         o = self.o_proj(a)
         return o
 
-    def init_weights(self):
-        nn.init.normal_(self.q_proj.weight, std=1 / math.sqrt(self.config.hidden_dim))
-        nn.init.normal_(self.kv_proj.weight, std=1 / math.sqrt(self.config.hidden_dim))
-        nn.init.normal_(self.o_proj.weight, std=1 / math.sqrt(self.config.hidden_dim * self.config.num_layers))
+    def init_weights(self, generator: Optional[torch.Generator] = None) -> None:
+        nn.init.normal_(self.q_proj.weight, std=1 / math.sqrt(self.config.hidden_dim), generator=generator)
+        nn.init.normal_(self.kv_proj.weight, std=1 / math.sqrt(self.config.hidden_dim), generator=generator)
+        nn.init.normal_(self.o_proj.weight, std=1 / math.sqrt(self.config.hidden_dim * self.config.num_layers), generator=generator)
 
 
 ####
@@ -166,9 +165,9 @@ class T5DecoderSelfAttention(nn.Module):
         o = self.o_proj(a)
         return o
 
-    def init_weights(self):
-        nn.init.normal_(self.qkv_proj.weight, std=1 / math.sqrt(self.config.hidden_dim))
-        nn.init.normal_(self.o_proj.weight, std=1 / math.sqrt(self.config.hidden_dim * self.config.num_layers))
+    def init_weights(self, generator: Optional[torch.Generator] = None) -> None:
+        nn.init.normal_(self.qkv_proj.weight, std=1 / math.sqrt(self.config.hidden_dim), generator=generator)
+        nn.init.normal_(self.o_proj.weight, std=1 / math.sqrt(self.config.hidden_dim * self.config.num_layers), generator=generator)
 
 
 ####
@@ -230,13 +229,13 @@ class T5DecoderLayer(nn.Module):
 
         return x
 
-    def init_weights(self):
-        self.self_attn.init_weights()
-        self.cross_attn.init_weights()
+    def init_weights(self, generator: Optional[torch.Generator] = None) -> None:
+        self.self_attn.init_weights(generator)
+        self.cross_attn.init_weights(generator)
         self.ln1.reset_parameters()
         self.ln2.reset_parameters()
         self.ln3.reset_parameters()
-        self.ffn.init_weights()
+        self.ffn.init_weights(generator)
 
 
 class T5DecoderStack(nn.Module):
@@ -427,8 +426,9 @@ class T5DecoderStack(nn.Module):
 
         return nonemb_flos + self.config.num_layers * (self_attn_flos + cross_attn_flos)
 
-    def init_weights(self):
-        self.relative_attention_bias.init_weights()
+    def init_weights(self, generator: Optional[torch.Generator] = None) -> None:
+        self.relative_attention_bias.init_weights(generator)
         self.ln.reset_parameters()
         for layer in self.layers:
-            layer.init_weights()
+            layer: T5DecoderLayer
+            layer.init_weights(generator)

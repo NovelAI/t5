@@ -15,6 +15,7 @@ import tabulate
 from nai_t5 import T5Config, to_based_config
 from nai_t5.t5_encoder import T5EncoderStack
 from nai_t5.t5_common import T5AttnImpl
+from nai_t5.replace_linear import replace_linear
 
 
 if TYPE_CHECKING:
@@ -70,20 +71,20 @@ class Args:
     bench_nai_flex: bool
     bench_compiled: bool
     display_flop_breakdown: bool
+    gpu_poor_linear: bool
 
 def main(args: Args):
     device=torch.device('cuda')
-    dtype=torch.bfloat16
 
     hf_model_name: str = ckpt_to_hf_model_name[args.ckpt]
     hf_config: T5ConfigHF = T5ConfigHF.from_pretrained(hf_model_name)
 
-    dtype = torch.bfloat16
+    dtype = torch.float16 if args.gpu_poor_linear else torch.bfloat16
     nai_config_sdpa: T5Config = to_based_config(hf_config, n_tokens=args.ctx_len)
     nai_config_sdpa.elementwise_affine = not args.nai_fuse_norm_scales
-    nai_config_sdpa.linear_weight_dtype = torch.bfloat16
-    nai_config_sdpa.emb_weight_dtype = torch.bfloat16
-    nai_config_sdpa.norm_weight_dtype = torch.bfloat16
+    nai_config_sdpa.linear_weight_dtype = dtype
+    nai_config_sdpa.emb_weight_dtype = dtype
+    nai_config_sdpa.norm_weight_dtype = dtype
     nai_config_flex = nai_config_sdpa.model_copy(update={
         'attn_impl': T5AttnImpl.Flex,
         'flex_kernel_options': {
@@ -103,6 +104,9 @@ def main(args: Args):
         torch.manual_seed(args.seed)
         with device:
             hf_enc = HFT5EncoderModel(hf_config).eval().to(dtype)
+        if args.gpu_poor_linear:
+            from gpu_poor.modules.lowp_linear import LowPrecisionLinear
+            replace_linear(hf_enc, LowPrecisionLinear)
         bind_hf_fwd: Callable[[HFT5EncoderModel], NiladicModelFwd] = lambda hf_enc: lambda: hf_enc(
             input_ids,
             attention_mask=(None if args.disable_mask else bool_mask),
@@ -117,6 +121,9 @@ def main(args: Args):
         torch.manual_seed(args.seed)
         with device:
             nai_enc_sdpa = T5EncoderStack(nai_config_sdpa).eval()
+        if args.gpu_poor_linear:
+            from gpu_poor.modules.lowp_linear import LowPrecisionLinear
+            replace_linear(nai_enc_sdpa, LowPrecisionLinear)
         bind_nai_sdpa_fwd: Callable[[T5EncoderStack], NiladicModelFwd] = lambda nai_enc_sdpa: lambda: nai_enc_sdpa(
             input_ids,
             input_mask=(None if args.disable_mask else bool_mask),
@@ -131,6 +138,9 @@ def main(args: Args):
         torch.manual_seed(args.seed)
         with device:
             nai_enc_flex = T5EncoderStack(nai_config_flex).eval()
+        if args.gpu_poor_linear:
+            from gpu_poor.modules.lowp_linear import LowPrecisionLinear
+            replace_linear(nai_enc_flex, LowPrecisionLinear)
         nai_enc_flex.bind_score_mods(args.ctx_len)
         def bind_nai_flex_fwd(nai_enc_sdpa: T5EncoderStack) -> NiladicModelFwd:
             from nai_t5.t5_encoder import make_self_attn_block_mask
@@ -267,6 +277,7 @@ if __name__ == '__main__':
     parser.add_argument('--bench-nai-sdpa', action='store_true')
     parser.add_argument('--bench-nai-flex', action='store_true')
     parser.add_argument('--bench-compiled', default=True, action=BooleanOptionalAction)
+    parser.add_argument('--gpu-poor-linear', action='store_true', help="benchmark in float16 mode and replace nn.Linear with gpu_poor's fp16-with-fp16-acc Linear, which should run faster on consumer-class GPUs, such as 3090 and 4090")
     parser.add_argument('--enable-cudnn-sdpa', action='store_true', help="cuDNN SDPA backend is faster than the default 'memory-efficient' backend but is not widely available and may be buggy.")
     parser.add_argument('--display-flop-breakdown', default=True, action=BooleanOptionalAction)
     parser.add_argument('--seed', type=int, default=42)

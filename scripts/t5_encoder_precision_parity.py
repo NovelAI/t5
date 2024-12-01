@@ -16,6 +16,7 @@ from nai_t5 import T5Config, T5EncoderStack
 from nai_t5.t5_common import RMSNormCast
 from nai_t5.t5_encoder import T5EncoderLayer
 from nai_t5.weight_load import FusingDeserializer
+from nai_t5.replace_linear import replace_linear
 
 from torch import Tensor
 from typing import Optional
@@ -202,6 +203,9 @@ def main():
             dtype=dtype,
             **scaling_kwargs,
         )
+        if f16_acc := False:
+            from gpu_poor.modules.lowp_linear import LowPrecisionLinear
+            replace_linear(f16_enc, LowPrecisionLinear)
     if bf16_enabled := False or (bf16_weight_donor := False):
         bf16_weight_donor = True
         dtype: Optional[torch.dtype] = torch.bfloat16 if bf16_needs_cast else None

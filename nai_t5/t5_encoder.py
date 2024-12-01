@@ -17,7 +17,6 @@ from .t5_common import (
     T5RelativeAttentionBias,
     T5ReLUFFN,
     ActAndResidual,
-    flash_attention_flops,
     get_ffn_factory,
     init_emb,
 )
@@ -426,14 +425,6 @@ class T5EncoderStack(nn.Module):
                     f"Expected to broadcast 2~4-dim input mask onto {scores_shape} scores, got mask {input_mask.shape} for {input_ids.shape} inputs."
                 )
         return attn_mask
-
-    def flop_count_per_sequence(self, input_ids_len: int, labels_len: int) -> int:
-        # note: encoder doesn't look at labels
-
-        # encoder self-attn is non-causal
-        return self.non_emb_param_count * input_ids_len * 6 + self.config.num_layers * flash_attention_flops(
-            1, input_ids_len, input_ids_len, self.config.hidden_dim, 1, False, mode="fwd_bwd"
-        )
 
     def init_weights(self, generator: Optional[torch.Generator] = None) -> None:
         init_emb(self.vocab_embed, generator=generator)

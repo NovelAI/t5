@@ -1,6 +1,6 @@
 import math
 from enum import Enum
-from typing import Optional, Type, Literal, Dict, Any, NamedTuple
+from typing import Optional, Type, Dict, Any, NamedTuple
 from pydantic import BaseModel, field_validator, field_serializer
 
 import torch
@@ -375,31 +375,6 @@ class RMSNormCast(RMSNorm):
                 next_residual = next_residual * self.residual_scale
             return ActAndResidual(normed, next_residual)
         return normed
-
-
-####
-#### FLOP counter
-####
-
-
-# Based on Dao-AILab's flops() function
-# https://github.com/Dao-AILab/flash-attention/blob/32792d37ec66902e5d82e149971daacbee8b55d7/benchmarks/benchmark_flash_attention.py#L27
-# License: BSD 3-clause
-# https://github.com/Dao-AILab/flash-attention/blob/main/LICENSE
-def flash_attention_flops(
-    batch: int,
-    q_len: int,
-    kv_len: int,
-    headdim: int,
-    nheads: int,
-    causal: bool,
-    mode: Literal["fwd", "bwd", "fwd_bwd"] = "fwd",
-) -> int | float:
-    assert mode in ["fwd", "bwd", "fwd_bwd"]
-    if q_len != kv_len:
-        assert not causal, "we don't know how well attention can take advantage of sparsity in causal cross-attention."
-    f = 4 * batch * nheads * q_len * kv_len * headdim // (2 if causal else 1)
-    return f if mode == "fwd" else (2.5 * f if mode == "bwd" else 3.5 * f)
 
 
 ####

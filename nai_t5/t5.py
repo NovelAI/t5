@@ -192,16 +192,6 @@ class T5(nn.Module):
 
         return DecoderAndPrompt(decode, decoder_start)
 
-    def flop_count_per_sequence(self, input_ids_len: int, labels_len: int) -> int:
-        encoder_flos = self.encoder.flop_count_per_sequence(input_ids_len, labels_len)
-        # deliberately counting the encoder.vocab_embed(labels) as 0 FLOs
-        decoder_flos = self.decoder.flop_count_per_sequence(input_ids_len, labels_len)
-
-        # 2x due to mul+add, 3x due to fwd+bwd
-        lm_head_flos = 6 * labels_len * self.lm_head_param_count
-
-        return encoder_flos + decoder_flos + lm_head_flos
-
     def init_weights(self, generator: Optional[torch.Generator] = None) -> None:
         nn.init.normal_(self.lm_head.weight, std=1 / math.sqrt(self.config.hidden_dim), generator=generator)
         self.encoder.init_weights(generator)

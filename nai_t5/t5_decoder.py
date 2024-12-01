@@ -7,7 +7,7 @@ from torch import BoolTensor, FloatTensor, inference_mode, nn
 from torch.nn import Linear
 from torch.nn.functional import scaled_dot_product_attention
 
-from .t5_common import RMSNormCast, T5GEGLUFFN, T5Config, T5RelativeAttentionBias, T5ReLUFFN, flash_attention_flops, get_ffn_factory
+from .t5_common import RMSNormCast, T5GEGLUFFN, T5Config, T5RelativeAttentionBias, T5ReLUFFN, get_ffn_factory
 
 ####
 #### T5 decoder cross-attention
@@ -407,24 +407,6 @@ class T5DecoderStack(nn.Module):
             )
             layer_kv.copy_(kv)
         return cross_kv
-
-    def flop_count_per_sequence(self, input_ids_len: int, labels_len: int) -> int:
-        # decoder's primary input is the labels (the sequence continuation). decoder:
-        # - (causally) self-attends to labels.
-        # - cross-attends over the encoded input_ids
-
-        # decoder self-attn *is* causal, but sparsity is not exploited due to arbitrary bias
-        self_attn_flos = flash_attention_flops(
-            1, labels_len, labels_len, self.config.hidden_dim, 1, False, mode="fwd_bwd"
-        )
-        # note argument order; our query is the labels, we cross-attend over input_ids
-        cross_attn_flos = flash_attention_flops(
-            1, labels_len, input_ids_len, self.config.hidden_dim, 1, False, mode="fwd_bwd"
-        )
-
-        nonemb_flos = self.non_emb_param_count * labels_len * 6
-
-        return nonemb_flos + self.config.num_layers * (self_attn_flos + cross_attn_flos)
 
     def init_weights(self, generator: Optional[torch.Generator] = None) -> None:
         self.relative_attention_bias.init_weights(generator)

@@ -223,7 +223,7 @@ def main(args: Args):
         (False, *(True,)*args.bench_compiled),
     ):
         for subject, ms_per_iter in msis.items():
-            iter_per_s: float = ms_per_iter
+            iter_per_s: float = 1000 / ms_per_iter
             flop_count: Optional[int] = result_flop[subject]
             if flop_count is None:
                 flops_str: str = "N/A"

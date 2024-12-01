@@ -7,9 +7,7 @@ import torch
 from einops import rearrange
 from torch import FloatTensor, LongTensor, Tensor, nn
 from torch.nn import Linear, Embedding
-from torch.nn.modules.normalization import _shape_t
-# from torch.nn.modules.normalization import RMSNorm, _shape_t
-from .layer_norm import RMSNorm
+from torch.nn.modules.normalization import RMSNorm, _shape_t
 from torch.amp import autocast
 
 ####
@@ -344,53 +342,42 @@ class RMSNormCast(RMSNorm):
         self,
         normalized_shape: _shape_t,
         eps: Optional[float] = None,
-        elementwise_affine: bool = True,
+        elementwise_affine = True,
         device: str | torch.device | None = None,
         dtype: torch.dtype = torch.float32,
         residual_scale: Optional[float] = None,
-        # triton norm seems to be slower if you're not compiling the model, but faster if you are
-        use_triton=True,
+        residual_in_fp32 = True,
     ) -> None:
-        assert isinstance(normalized_shape, int)
         super().__init__(
             normalized_shape,
             eps=eps,
             elementwise_affine=elementwise_affine,
             device=device,
             dtype=dtype,
-            residual_scale=residual_scale,
-            use_triton=use_triton,
         )
-    
-    def forward(self, x: FloatTensor, residual: FloatTensor, prenorm=True) -> ActAndResidual | FloatTensor:
-        out = super().forward(x, residual=residual, prenorm=prenorm, residual_in_fp32=True)
+        self.residual_scale = residual_scale
+        self.residual_in_fp32 = residual_in_fp32
+
+    @autocast(device_type='cuda', enabled=False)
+    def forward(
+        self,
+        x: FloatTensor,
+        residual: Optional[FloatTensor] = None,
+        prenorm=True,
+    ) -> ActAndResidual | FloatTensor:
+        orig_dtype = x.dtype
+        next_residual = x
+        x = x.float()
+        if residual is not None:
+            x = x + residual.float()
+        normed: FloatTensor = super().forward(x).type(orig_dtype)
         if prenorm:
-            x, residual = out
-            return ActAndResidual(x=x, residual=residual)
-        return out
-
-
-# class RMSNormCast(RMSNorm):
-#     def __init__(
-#         self,
-#         normalized_shape: _shape_t,
-#         eps: Optional[float] = None,
-#         elementwise_affine: bool = True,
-#         device: str | torch.device | None = None,
-#         dtype: torch.dtype = torch.float32,
-#     ) -> None:
-#         super().__init__(
-#             normalized_shape,
-#             eps=eps,
-#             elementwise_affine=elementwise_affine,
-#             device=device,
-#             dtype=dtype,
-#         )
-
-#     @autocast(device_type='cuda', enabled=False)
-#     def forward(self, input: Tensor) -> Tensor:
-#         dtype = self.weight.dtype if self.elementwise_affine else torch.float32
-#         return super().forward(input.type(dtype)).type_as(input)
+            if self.residual_in_fp32:
+                next_residual = next_residual.float()
+            if self.residual_scale is not None:
+                next_residual = next_residual * self.residual_scale
+            return ActAndResidual(normed, next_residual)
+        return normed
 
 
 ####

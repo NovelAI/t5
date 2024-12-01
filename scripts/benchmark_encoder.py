@@ -1,8 +1,9 @@
-from typing import Optional, Callable, TYPE_CHECKING, Any
+from typing import Optional, Callable, NamedTuple, TYPE_CHECKING, Any
 from functools import partial
 from argparse import ArgumentParser, BooleanOptionalAction
 from enum import Enum
 from dataclasses import dataclass
+from contextlib import nullcontext
 from torch import FloatTensor, LongTensor, BoolTensor, no_grad, inference_mode
 from torch.nn.attention import SDPBackend, sdpa_kernel
 import torch
@@ -10,24 +11,23 @@ from torch.utils.flop_counter import FlopCounterMode
 from triton.testing import do_bench
 from transformers.models.t5.configuration_t5 import T5Config as T5ConfigHF
 from transformers.models.t5 import T5EncoderModel as HFT5EncoderModel
+import tabulate
 from nai_t5 import T5Config, to_based_config
 from nai_t5.t5_encoder import T5EncoderStack
 from nai_t5.t5_common import T5AttnImpl
-from contextlib import nullcontext
+
 
 if TYPE_CHECKING:
     from torch.nn.attention.flex_attention import BlockMask
 else:
     BlockMask = Any
 
-def get_flops_achieved(f):
-  flop_counter = FlopCounterMode(display=True)
-  with flop_counter, no_grad():
-    f()
-  total_flops = flop_counter.get_total_flops()
-  ms_per_iter = do_bench(f)
-  iters_per_second = 1e3/ms_per_iter
-  print(f"{iters_per_second * total_flops / 1e12} TF/s")
+def mpi_to_flops(ms_per_iter: float, flop_count: int) -> float:
+    iters_per_second = 1e3 / ms_per_iter
+    return iters_per_second * flop_count
+
+def fmt_flops(flops: int) -> str:
+    return f"{flops / 1e12:5.1f} TFLOP/s"
 
 NiladicModelFwd = Callable[[], FloatTensor]
 
@@ -68,6 +68,8 @@ class Args:
     bench_hf: bool
     bench_nai_sdpa: bool
     bench_nai_flex: bool
+    bench_compiled: bool
+    display_flop_breakdown: bool
 
 def main(args: Args):
     device=torch.device('cuda')
@@ -160,10 +162,12 @@ def main(args: Args):
 
     result_msi: dict[BenchSubject, float] = {}
     result_c_msi: dict[BenchSubject, float] = {}
+
+    print(f'==benchmarking latency==')
     
     for subjects, compiled, result_out in zip(
         (bench_subjects, bench_subjects_c),
-        (False, True),
+        (False, *(True,)*args.bench_compiled),
         (result_msi, result_c_msi),
     ):
         qualifier = ' compiled' if compiled else ''
@@ -178,6 +182,73 @@ def main(args: Args):
 {ms_per_iter:7.1f}ms
 {iter_per_s:7.1f}it/sec
 ''')
+     
+    result_flop: dict[BenchSubject, int] = {}
+
+    print(f'==tracing FLOPs==')
+
+    for subject, fwd in bench_subjects.items():
+        if subject == BenchSubject.NAI_Flex:
+            # HOP dispatch has no rule registered for Flex under DispatchMode
+            print("Can't count FLOPs for Flex; skipping.")
+            continue
+        print(f'tracing {subject} FLOPs...')
+        flop_counter = FlopCounterMode(display=args.display_flop_breakdown)
+        with get_sdpa_ctx(), flop_counter, no_grad():
+            fwd()
+        flop_count: int = flop_counter.get_total_flops()
+        result_flop[subject] = flop_count
+    
+    if BenchSubject.NAI_Flex in bench_subjects:
+        if BenchSubject.NAI_SDPA in bench_subjects:
+            print("Flex FLOP/s; will be computed using Flex latency and NAI SDPA FLOP count.")
+            result_flop[BenchSubject.NAI_Flex] = result_flop[BenchSubject.NAI_SDPA]
+        elif BenchSubject.NAI_SDPA in bench_subjects:
+            print("Flex FLOP/s; will be computed using Flex latency and HF FLOP count.")
+            result_flop[BenchSubject.NAI_Flex] = result_flop[BenchSubject.HF]
+        else:
+            print("No fallback FLOP count available for Flex; will not be able to compute FLOP/s.")
+            result_flop[BenchSubject.NAI_Flex] = None
+
+    class BenchResult(NamedTuple):
+        subject: str
+        compiled: bool
+        flops: str
+        ms_per_iter: str
+        iter_per_sec: str
+    
+    table_rows: list[BenchResult] = []
+    for msis, compiled in zip(
+        (result_msi, result_c_msi),
+        (False, *(True,)*args.bench_compiled),
+    ):
+        for subject, ms_per_iter in msis.items():
+            iter_per_s: float = ms_per_iter
+            flop_count: Optional[int] = result_flop[subject]
+            if flop_count is None:
+                flops_str: str = "N/A"
+            else:
+                flops: float = mpi_to_flops(ms_per_iter, flop_count)
+                flops_str: str = fmt_flops(flops)
+            bench_result = BenchResult(
+                subject=subject,
+                compiled=str(compiled).rjust(5),
+                flops=flops_str.rjust(13),
+                ms_per_iter=f"{ms_per_iter:7.1f}",
+                iter_per_sec=f"{iter_per_s:7.1f}",
+            )
+            table_rows.append(bench_result)
+    table_str: str = tabulate.tabulate(
+        table_rows,
+        headers=[
+            "Implementation",
+            "Compiled",
+            "FLOP/s",
+            "ms/iter",
+            "iter/s",
+        ],
+    )
+    print(table_str)
     pass
 
 if __name__ == '__main__':
@@ -195,7 +266,9 @@ if __name__ == '__main__':
     parser.add_argument('--bench-hf', action='store_true')
     parser.add_argument('--bench-nai-sdpa', action='store_true')
     parser.add_argument('--bench-nai-flex', action='store_true')
+    parser.add_argument('--bench-compiled', default=True, action=BooleanOptionalAction)
     parser.add_argument('--enable-cudnn-sdpa', action='store_true', help="cuDNN SDPA backend is faster than the default 'memory-efficient' backend but is not widely available and may be buggy.")
+    parser.add_argument('--display-flop-breakdown', default=True, action=BooleanOptionalAction)
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
     main(Args(**vars(args)))

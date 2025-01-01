@@ -203,9 +203,12 @@ def main():
             dtype=dtype,
             **scaling_kwargs,
         )
-        if f16_acc := False:
-            from gpu_poor.modules.lowp_linear import LowPrecisionLinear
+        if f16_acc_gpupoor := False:
+            from gpu_poor.modules import LowPrecisionLinear
             replace_linear(f16_enc, LowPrecisionLinear)
+        if f16_acc_cublas_ops := False:
+            from cublas_ops import CublasLinear
+            replace_linear(f16_enc, CublasLinear)
     if bf16_enabled := False or (bf16_weight_donor := False):
         bf16_weight_donor = True
         dtype: Optional[torch.dtype] = torch.bfloat16 if bf16_needs_cast else None

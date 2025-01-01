@@ -72,6 +72,7 @@ class Args:
     bench_compiled: bool
     display_flop_breakdown: bool
     gpu_poor_linear: bool
+    cublas_ops_linear: bool
 
 def main(args: Args):
     device=torch.device('cuda')
@@ -104,8 +105,11 @@ def main(args: Args):
         torch.manual_seed(args.seed)
         with device:
             hf_enc = HFT5EncoderModel(hf_config).eval().to(dtype)
+        if args.cublas_ops_linear:
+            from cublas_ops import CublasLinear
+            replace_linear(hf_enc, CublasLinear)
         if args.gpu_poor_linear:
-            from gpu_poor.modules.lowp_linear import LowPrecisionLinear
+            from gpu_poor.modules import LowPrecisionLinear
             replace_linear(hf_enc, LowPrecisionLinear)
         bind_hf_fwd: Callable[[HFT5EncoderModel], NiladicModelFwd] = lambda hf_enc: lambda: hf_enc(
             input_ids,
@@ -121,8 +125,11 @@ def main(args: Args):
         torch.manual_seed(args.seed)
         with device:
             nai_enc_sdpa = T5EncoderStack(nai_config_sdpa).eval()
+        if args.cublas_ops_linear:
+            from cublas_ops import CublasLinear
+            replace_linear(nai_enc_sdpa, CublasLinear)
         if args.gpu_poor_linear:
-            from gpu_poor.modules.lowp_linear import LowPrecisionLinear
+            from gpu_poor.modules import LowPrecisionLinear
             replace_linear(nai_enc_sdpa, LowPrecisionLinear)
         bind_nai_sdpa_fwd: Callable[[T5EncoderStack], NiladicModelFwd] = lambda nai_enc_sdpa: lambda: nai_enc_sdpa(
             input_ids,
@@ -138,8 +145,11 @@ def main(args: Args):
         torch.manual_seed(args.seed)
         with device:
             nai_enc_flex = T5EncoderStack(nai_config_flex).eval()
+        if args.cublas_ops_linear:
+            from cublas_ops import CublasLinear
+            replace_linear(nai_enc_flex, CublasLinear)
         if args.gpu_poor_linear:
-            from gpu_poor.modules.lowp_linear import LowPrecisionLinear
+            from gpu_poor.modules import LowPrecisionLinear
             replace_linear(nai_enc_flex, LowPrecisionLinear)
         nai_enc_flex.bind_score_mods(args.ctx_len)
         def bind_nai_flex_fwd(nai_enc_sdpa: T5EncoderStack) -> NiladicModelFwd:
@@ -196,6 +206,15 @@ def main(args: Args):
     result_flop: dict[BenchSubject, int] = {}
 
     print(f'==tracing FLOPs==')
+
+    # both of these now have working FLOP counters now so no need to count FLOPs with regular Linear
+    # if args.gpu_poor_linear or args.cublas_ops_linear:
+    #     if args.bench_hf:
+    #         replace_linear(hf_enc, Linear)
+    #     if args.bench_nai_sdpa:
+    #         replace_linear(nai_enc_sdpa, Linear)
+    #     if args.bench_nai_flex:
+    #         replace_linear(nai_enc_flex, Linear)
 
     for subject, fwd in bench_subjects.items():
         if subject == BenchSubject.NAI_Flex:
@@ -277,7 +296,8 @@ if __name__ == '__main__':
     parser.add_argument('--bench-nai-sdpa', action='store_true')
     parser.add_argument('--bench-nai-flex', action='store_true')
     parser.add_argument('--bench-compiled', default=True, action=BooleanOptionalAction)
-    parser.add_argument('--gpu-poor-linear', action='store_true', help="benchmark in float16 mode and replace nn.Linear with gpu_poor's fp16-with-fp16-acc Linear, which should run faster on consumer-class GPUs, such as 3090 and 4090")
+    parser.add_argument('--gpu-poor-linear', action='store_true', help="(using github.com/sekstini/gpupoor) benchmark in float16 mode and replace nn.Linear with gpu_poor's fp16-with-fp16-acc Linear, which should run faster on consumer-class GPUs, such as 3090 and 4090")
+    parser.add_argument('--cublas-ops-linear', action='store_true', help="(using github.com/aredden/torch-cublas-hgemm) benchmark in float16 mode and replace nn.Linear with gpu_poor's fp16-with-fp16-acc Linear, which should run faster on consumer-class GPUs, such as 3090 and 4090")
     parser.add_argument('--enable-cudnn-sdpa', action='store_true', help="cuDNN SDPA backend is faster than the default 'memory-efficient' backend but is not widely available and may be buggy.")
     parser.add_argument('--display-flop-breakdown', default=True, action=BooleanOptionalAction)
     parser.add_argument('--seed', type=int, default=42)

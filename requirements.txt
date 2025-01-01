@@ -4,3 +4,4 @@ pydantic
 # - parity-testing against HF implementations
 # - loading HF model weights
 transformers
+einops

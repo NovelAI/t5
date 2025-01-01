@@ -19,6 +19,27 @@
             }
         },
         {
+            "name": "Benchmark Encoder",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "scripts.benchmark_encoder",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": false,
+            "args": [
+                "--ckpt", "v1_1-xxl",
+                "--batch-size", "1",
+                "--nai-fuse-norm-scales",
+                // "--bench-hf",
+                "--bench-nai-sdpa",
+                // "--bench-nai-flex",
+                // "--no-bench-compiled",
+                "--enable-cudnn-sdpa",
+                // "--cublas-ops-linear",
+                // "--gpu-poor-linear",
+            ],
+        },
+        {
             "name": "T5 encoder parity",
             "type": "debugpy",
             "request": "launch",

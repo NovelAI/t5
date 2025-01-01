@@ -61,9 +61,9 @@ def main():
     is_umt5: bool = hf_config.model_type == 'umt5'
 
     if is_umt5:
-        hf_tokenizer: T5TokenizerFast = T5TokenizerFast.from_pretrained(args.model_name, legacy=False)
-    else:
         hf_tokenizer: LlamaTokenizerFast = LlamaTokenizerFast.from_pretrained(args.model_name)
+    else:
+        hf_tokenizer: T5TokenizerFast = T5TokenizerFast.from_pretrained(args.model_name, legacy=False)
 
     weight_dtype: Optional[torch.dtype] = None if args.weight_dtype is None else dtype_map[args.weight_dtype]
     hf_dtype_kwargs = {} if weight_dtype is None else {'torch_dtype': weight_dtype}

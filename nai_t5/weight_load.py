@@ -1,5 +1,6 @@
-from nai_t5 import T5, T5EncoderStack, T5Config
-from nai_t5.t5_encoder import T5EncoderLayer
+from nai_t5 import T5, T5Config
+from nai_t5.t5_encoder import T5EncoderStack, T5EncoderLayer
+from nai_t5.t5_decoder import T5DecoderStack, T5DecoderLayer
 from typing import Optional, OrderedDict, TYPE_CHECKING, Any, Protocol, Literal, Callable
 from dataclasses import dataclass
 from functools import partial
@@ -84,6 +85,8 @@ class FusingDeserializer(TensorDeserializer):
         fuse_norm_scales = False,
         enc_attn_out_scales: Optional[list[float]] = None,
         enc_ffn_out_scales: Optional[list[float]] = None,
+        dec_attn_out_scales: Optional[list[float]] = None,
+        dec_ffn_out_scales: Optional[list[float]] = None,
         verify_hash: Optional[bool] = None,
     ) -> int:
         """
@@ -94,6 +97,10 @@ class FusingDeserializer(TensorDeserializer):
             enc_attn_out_scales or [1.] * config.num_layers,
             enc_ffn_out_scales or [1.] * config.num_layers,
         )
+        dec_scales: Scales = resolve_scales(
+            dec_attn_out_scales or [1.] * config.num_layers,
+            dec_ffn_out_scales or [1.] * config.num_layers,
+        )
 
         def receives_residual(obj_path: str, qualifier: Optional[Literal['encoder', 'decoder']] = None) -> bool:
             prefix = f"{qualifier}." if qualifier else ''
@@ -102,10 +109,14 @@ class FusingDeserializer(TensorDeserializer):
         match m:
             case T5():
                 receives_enc_residual: Callable[[str], bool] = partial(receives_residual, qualifier='encoder')
+                receives_dec_residual: Callable[[str], bool] = partial(receives_residual, qualifier='decoder')
                 enc: T5EncoderStack = m.encoder
+                dec: T5DecoderStack = m.encoder
             case T5EncoderStack():
                 receives_enc_residual: Callable[[str], bool] = receives_residual
+                receives_dec_residual: Callable[[str], bool] = lambda _: False
                 enc: T5EncoderStack = m
+                dec: Optional[T5DecoderStack] = None
             case _:
                 raise ValueError(f"Unsupported model type: {type(m)}")
         
@@ -119,6 +130,18 @@ class FusingDeserializer(TensorDeserializer):
             layer.ln1.residual_scale = ln1_residual_scale
             layer.ln2.residual_scale = ln2_residual_scale
         enc.ln.eps *= enc_scales.final_norm_eps_scale
+
+        if dec is not None:
+            for layer, ln1_eps_scale, ln2_eps_scale, ln1_residual_scale, ln2_residual_scale in zip(
+                dec.layers, dec_scales.ln1_eps_scales, dec_scales.ln2_eps_scales, dec_scales.attn_out_scales, dec_scales.ffn_out_scales,
+            ):
+                layer: T5DecoderLayer
+                layer.ln1.eps *= ln1_eps_scale
+                layer.ln2.eps *= ln2_eps_scale
+                # make residual smaller at the same time as we make a layer output smaller
+                layer.ln1.residual_scale = ln1_residual_scale
+                layer.ln2.residual_scale = ln2_residual_scale
+            dec.ln.eps *= enc_scales.final_norm_eps_scale
 
         modules: OrderedDict[str, torch.nn.Module] = OrderedDict()
 
@@ -208,6 +231,13 @@ class FusingDeserializer(TensorDeserializer):
                     elif match := re.search(is_ff_out, name):
                         layer_idx: int = int(match.group(1))
                         out_scale: float = enc_scales.ffn_out_scales_cp_hat[layer_idx]
+                if receives_dec_residual(obj_path):
+                    if match := re.search(is_o_proj, name):
+                        layer_idx: int = int(match.group(1))
+                        out_scale: float = dec_scales.attn_out_scales_cp_hat[layer_idx]
+                    elif match := re.search(is_ff_out, name):
+                        layer_idx: int = int(match.group(1))
+                        out_scale: float = dec_scales.ffn_out_scales_cp_hat[layer_idx]
 
                 if entry.type is param_type:
                     if name in wants_norm_fusion:

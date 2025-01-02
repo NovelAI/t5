@@ -111,7 +111,7 @@ class FusingDeserializer(TensorDeserializer):
                 receives_enc_residual: Callable[[str], bool] = partial(receives_residual, qualifier='encoder')
                 receives_dec_residual: Callable[[str], bool] = partial(receives_residual, qualifier='decoder')
                 enc: T5EncoderStack = m.encoder
-                dec: T5DecoderStack = m.encoder
+                dec: T5DecoderStack = m.decoder
             case T5EncoderStack():
                 receives_enc_residual: Callable[[str], bool] = receives_residual
                 receives_dec_residual: Callable[[str], bool] = lambda _: False

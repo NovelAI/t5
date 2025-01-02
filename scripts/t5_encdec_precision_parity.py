@@ -251,7 +251,7 @@ def main():
                     handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
                     handles.append(handle)
                 case Linear():
-                    if print_first_block_only and not name.startswith('layers.0'): continue
+                    if print_first_block_only and not name.removeprefix('encoder.').removeprefix('decoder.').startswith('layers.0'): continue
                     def hook(mod, args, output, name: str):
                         if name.endswith('qkv_proj'):
                             q, k, v = output.chunk(3, dim=-1)
@@ -284,7 +284,7 @@ def main():
                     handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
                     handles.append(handle)
                 case T5DecoderLayer() | T5EncoderLayer():
-                    if print_first_block_only and name != 'layers.0': continue
+                    if print_first_block_only and name.removeprefix('encoder.').removeprefix('decoder.') != 'layers.0': continue
                     def hook(mod, args, output, name: str):
                         # out_list.append(NamedActivation(name, output))
                         # assert output.isfinite().all(), f'{model_name} {name} has non-finite values'
@@ -299,7 +299,7 @@ def main():
                     handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
                     handles.append(handle)
                 case RMSNormCast():
-                    if print_first_block_only and not name.startswith('layers.0'): continue
+                    if print_first_block_only and not name.removeprefix('encoder.').removeprefix('decoder.').startswith('layers.0'): continue
                     def hook(mod, args, kwargs: dict[str, Any], output, name: str):
                         # assert (name := kwargs.get('name', None)) is not None
                         (input,) = args
@@ -326,7 +326,7 @@ def main():
                     handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name), with_kwargs=True)
                     handles.append(handle)
                 case GELU():
-                    if print_first_block_only and not name.startswith('layers.0'): continue
+                    if print_first_block_only and not name.removeprefix('encoder.').removeprefix('decoder.').startswith('layers.0'): continue
                     def hook(mod, args, output, name: str):
                         out_list.append(NamedActivation(name, output))
                         assert output.isfinite().all(), f'{model_name} {name} has non-finite values'
@@ -334,7 +334,7 @@ def main():
                     handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
                     handles.append(handle)
                 case T5GEGLUFFN():
-                    if print_first_block_only and not name.startswith('layers.0'): continue
+                    if print_first_block_only and not name.removeprefix('encoder.').removeprefix('decoder.').startswith('layers.0'): continue
                     def hook(mod, args, output, name: str):
                         out_list.append(NamedActivation(name, output))
                         assert output.isfinite().all(), f'{model_name} {name} has non-finite values'

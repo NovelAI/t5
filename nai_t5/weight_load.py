@@ -244,13 +244,28 @@ class FusingDeserializer(TensorDeserializer):
 
         is_ln1 = re.compile(r'layers\.(\d+)\.ln1\.weight$')
         is_ln2 = re.compile(r'layers\.(\d+)\.ln2\.weight$')
+        is_ln3 = re.compile(r'layers\.(\d+)\.ln3\.weight$')
         is_o_proj = re.compile(r'layers\.(\d+)\.attn\.o_proj\.weight$')
+        is_self_o_proj = re.compile(r'layers\.(\d+)\.self_attn\.o_proj\.weight$')
+        is_cross_o_proj = re.compile(r'layers\.(\d+)\.cross_attn\.o_proj\.weight$')
         is_ff_out = re.compile(r'layers\.(\d+)\.ffn\.ff_out\.weight$')
         if fuse_norm_scales:
-            is_ln1or2 = re.compile(r'layers\.(\d+)\.ln[12]\.weight$')
+            is_ln1or2or3 = re.compile(r'layers\.(\d+)\.ln[123]\.weight$')
+            enc_keys = keys if dec is None else tuple(k for k, *_ in keys if k.startswith('encoder.'))
+            dec_keys = () if dec is None else tuple(k for k, *_ in keys if k.startswith('decoder.'))
+            enc_ln_wants_lin: dict[str, str] = {
+                **{k: k.replace('ln1', 'attn.qkv_proj') for k, *_ in enc_keys if re.search(is_ln1, k)},
+                **{k: k.replace('ln2', 'ffn.ff_in') for k, *_ in enc_keys if re.search(is_ln2, k)},
+            }
+            dec_ln_wants_lin: dict[str, str] = {} if dec is None else {
+                **{k: k.replace('ln1', 'self_attn.qkv_proj') for k, *_ in dec_keys if re.search(is_ln1, k)},
+                # TODO: presumably we need to fuse ln2's norm scale into cross_attn.kv_proj also, but algorithm doesn't support one-to-many yet
+                **{k: k.replace('ln2', 'cross_attn.q_proj') for k, *_ in dec_keys if re.search(is_ln2, k)},
+                **{k: k.replace('ln3', 'ffn.ff_in') for k, *_ in dec_keys if re.search(is_ln3, k)},
+            }
             ln_wants_lin: dict[str, str] = {
-                **{k: k.replace('ln1', 'attn.qkv_proj') for k, *_ in keys if re.search(is_ln1, k)},
-                **{k: k.replace('ln2', 'ffn.ff_in') for k, *_ in keys if re.search(is_ln2, k)},
+                **enc_ln_wants_lin,
+                **dec_ln_wants_lin,
             }
             lin_wants_ln: dict[str, str] = {v: k for k, v in ln_wants_lin.items()}
             wants_norm_fusion: set[str] = ln_wants_lin.keys() | lin_wants_ln.keys()
@@ -321,16 +336,19 @@ class FusingDeserializer(TensorDeserializer):
                         layer_idx: int = int(match.group(1))
                         out_scale: float = enc_scales.ffn_out_scales_cp_hat[layer_idx]
                 if receives_dec_residual(obj_path):
-                    if match := re.search(is_o_proj, name):
+                    if match := re.search(is_self_o_proj, name):
                         layer_idx: int = int(match.group(1))
-                        out_scale: float = dec_scales.attn_out_scales_cp_hat[layer_idx]
+                        out_scale: float = dec_scales.self_attn_out_scales_cp_hat[layer_idx]
+                    elif match := re.search(is_cross_o_proj, name):
+                        layer_idx: int = int(match.group(1))
+                        out_scale: float = dec_scales.cross_attn_out_scales_cp_hat[layer_idx]
                     elif match := re.search(is_ff_out, name):
                         layer_idx: int = int(match.group(1))
                         out_scale: float = dec_scales.ffn_out_scales_cp_hat[layer_idx]
 
                 if entry.type is param_type:
                     if name in wants_norm_fusion:
-                        if re.search(is_ln1or2, name):
+                        if re.search(is_ln1or2or3, name):
                             counterpart_dict: dict[str, str] = ln_wants_lin
                             fuse_kwargs = { 's_name': name, 'ln_scale': tensor }
                         else:

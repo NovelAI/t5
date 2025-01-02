@@ -69,7 +69,8 @@ def get_model(
     norm_fusion_via_f32 = False,
     enc_attn_out_scales: Optional[list[float]] = None,
     enc_ffn_out_scales: Optional[list[float]] = None,
-    dec_attn_out_scales: Optional[list[float]] = None,
+    dec_self_attn_out_scales: Optional[list[float]] = None,
+    dec_cross_attn_out_scales: Optional[list[float]] = None,
     dec_ffn_out_scales: Optional[list[float]] = None,
 ) -> EncDecAndConfig:
     with open(dir / 'config.json', 'r') as f:
@@ -88,7 +89,8 @@ def get_model(
             norm_fusion_via_f32=norm_fusion_via_f32,
             enc_attn_out_scales=enc_attn_out_scales,
             enc_ffn_out_scales=enc_ffn_out_scales,
-            dec_attn_out_scales=dec_attn_out_scales,
+            dec_self_attn_out_scales=dec_self_attn_out_scales,
+            dec_cross_attn_out_scales=dec_cross_attn_out_scales,
             dec_ffn_out_scales=dec_ffn_out_scales,
         )
     else:

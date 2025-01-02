@@ -17,7 +17,7 @@ else:
     _TensorPath = Any
 
 @dataclass
-class Scales:
+class EncScales:
     attn_out_scales: list[float]
     attn_out_scales_cp_hat: list[float]
     ffn_out_scales: list[float]
@@ -26,10 +26,23 @@ class Scales:
     ln2_eps_scales: list[float]
     final_norm_eps_scale: float
 
-def resolve_scales(
+@dataclass
+class DecScales:
+    self_attn_out_scales: list[float]
+    self_attn_out_scales_cp_hat: list[float]
+    cross_attn_out_scales: list[float]
+    cross_attn_out_scales_cp_hat: list[float]
+    ffn_out_scales: list[float]
+    ffn_out_scales_cp_hat: list[float]
+    ln1_eps_scales: list[float]
+    ln2_eps_scales: list[float]
+    ln3_eps_scales: list[float]
+    final_norm_eps_scale: float
+
+def resolve_enc_scales(
     attn_out_scales: Optional[list[float]] = None,
     ffn_out_scales: Optional[list[float]] = None,
-) -> Scales:
+) -> EncScales:
     attn_out_scales: FloatTensor = torch.tensor(attn_out_scales, dtype=torch.float32)
     attn_out_scales_cp: FloatTensor = attn_out_scales.cumprod(-1)
 
@@ -49,13 +62,61 @@ def resolve_scales(
 
     final_norm_eps_scale = ffn_out_scales_cp_hat[-1].item()
 
-    return Scales(
+    return EncScales(
         attn_out_scales=attn_out_scales.tolist(),
         attn_out_scales_cp_hat=attn_out_scales_cp_hat.tolist(),
         ffn_out_scales=ffn_out_scales.tolist(),
         ffn_out_scales_cp_hat=ffn_out_scales_cp_hat.tolist(),
         ln1_eps_scales=ln1_eps_scales.tolist(),
         ln2_eps_scales=ln2_eps_scales.tolist(),
+        final_norm_eps_scale=final_norm_eps_scale,
+    )
+
+def resolve_dec_scales(
+    self_attn_out_scales: Optional[list[float]] = None,
+    cross_attn_out_scales: Optional[list[float]] = None,
+    ffn_out_scales: Optional[list[float]] = None,
+) -> DecScales:
+    self_attn_out_scales: FloatTensor = torch.tensor(self_attn_out_scales, dtype=torch.float32)
+    self_attn_out_scales_cp: FloatTensor = self_attn_out_scales.cumprod(-1)
+
+    cross_attn_out_scales: FloatTensor = torch.tensor(cross_attn_out_scales, dtype=torch.float32)
+    cross_attn_out_scales_cp: FloatTensor = cross_attn_out_scales.cumprod(-1)
+
+    ffn_out_scales: FloatTensor = torch.tensor(ffn_out_scales, dtype=torch.float32)
+    ffn_out_scales_cp: FloatTensor = ffn_out_scales.cumprod(-1)
+
+    self_attn_out_scales_cp_hat = self_attn_out_scales_cp.clone()
+    self_attn_out_scales_cp_hat[1:].mul_(cross_attn_out_scales_cp[:-1])
+    self_attn_out_scales_cp_hat[1:].mul_(ffn_out_scales_cp[:-1])
+
+    cross_attn_out_scales_cp_hat = cross_attn_out_scales_cp.clone()
+    cross_attn_out_scales_cp_hat.mul_(self_attn_out_scales_cp)
+    cross_attn_out_scales_cp_hat[1:].mul_(ffn_out_scales_cp[:-1])
+
+    ffn_out_scales_cp_hat = ffn_out_scales_cp.clone()
+    ffn_out_scales_cp_hat.mul_(self_attn_out_scales_cp)
+    ffn_out_scales_cp_hat.mul_(cross_attn_out_scales_cp)
+
+    ln1_eps_scales = ffn_out_scales_cp_hat.roll(1, dims=-1)
+    ln1_eps_scales[0].copy_(1)
+
+    ln2_eps_scales = self_attn_out_scales_cp_hat
+
+    ln3_eps_scales = cross_attn_out_scales_cp_hat
+
+    final_norm_eps_scale = ffn_out_scales_cp_hat[-1].item()
+
+    return DecScales(
+        self_attn_out_scales=self_attn_out_scales.tolist(),
+        self_attn_out_scales_cp_hat=self_attn_out_scales_cp_hat.tolist(),
+        cross_attn_out_scales=cross_attn_out_scales.tolist(),
+        cross_attn_out_scales_cp_hat=cross_attn_out_scales_cp_hat.tolist(),
+        ffn_out_scales=ffn_out_scales.tolist(),
+        ffn_out_scales_cp_hat=ffn_out_scales_cp_hat.tolist(),
+        ln1_eps_scales=ln1_eps_scales.tolist(),
+        ln2_eps_scales=ln2_eps_scales.tolist(),
+        ln3_eps_scales=ln3_eps_scales.tolist(),
         final_norm_eps_scale=final_norm_eps_scale,
     )
 
@@ -85,7 +146,8 @@ class FusingDeserializer(TensorDeserializer):
         fuse_norm_scales = False,
         enc_attn_out_scales: Optional[list[float]] = None,
         enc_ffn_out_scales: Optional[list[float]] = None,
-        dec_attn_out_scales: Optional[list[float]] = None,
+        dec_self_attn_out_scales: Optional[list[float]] = None,
+        dec_cross_attn_out_scales: Optional[list[float]] = None,
         dec_ffn_out_scales: Optional[list[float]] = None,
         verify_hash: Optional[bool] = None,
     ) -> int:
@@ -93,12 +155,13 @@ class FusingDeserializer(TensorDeserializer):
         Load weights into a model, fusing or scaling layers as we go.
         """
         config: T5Config = m.config
-        enc_scales: Scales = resolve_scales(
+        enc_scales: EncScales = resolve_enc_scales(
             enc_attn_out_scales or [1.] * config.num_layers,
             enc_ffn_out_scales or [1.] * config.num_layers,
         )
-        dec_scales: Scales = resolve_scales(
-            dec_attn_out_scales or [1.] * config.num_layers,
+        dec_scales: DecScales = resolve_dec_scales(
+            dec_self_attn_out_scales or [1.] * config.num_layers,
+            dec_cross_attn_out_scales or [1.] * config.num_layers,
             dec_ffn_out_scales or [1.] * config.num_layers,
         )
 
@@ -120,8 +183,18 @@ class FusingDeserializer(TensorDeserializer):
             case _:
                 raise ValueError(f"Unsupported model type: {type(m)}")
         
-        for layer, ln1_eps_scale, ln2_eps_scale, ln1_residual_scale, ln2_residual_scale in zip(
-            enc.layers, enc_scales.ln1_eps_scales, enc_scales.ln2_eps_scales, enc_scales.attn_out_scales, enc_scales.ffn_out_scales,
+        for (
+            layer,
+            ln1_eps_scale,
+            ln2_eps_scale,
+            ln1_residual_scale,
+            ln2_residual_scale,
+        ) in zip(
+            enc.layers,
+            enc_scales.ln1_eps_scales,
+            enc_scales.ln2_eps_scales,
+            enc_scales.attn_out_scales,
+            enc_scales.ffn_out_scales,
         ):
             layer: T5EncoderLayer
             layer.ln1.eps *= ln1_eps_scale
@@ -132,15 +205,31 @@ class FusingDeserializer(TensorDeserializer):
         enc.ln.eps *= enc_scales.final_norm_eps_scale
 
         if dec is not None:
-            for layer, ln1_eps_scale, ln2_eps_scale, ln1_residual_scale, ln2_residual_scale in zip(
-                dec.layers, dec_scales.ln1_eps_scales, dec_scales.ln2_eps_scales, dec_scales.attn_out_scales, dec_scales.ffn_out_scales,
+            for (
+                layer,
+                ln1_eps_scale,
+                ln2_eps_scale,
+                ln3_eps_scale,
+                ln1_residual_scale,
+                ln2_residual_scale,
+                ln3_residual_scale,
+            ) in zip(
+                dec.layers,
+                dec_scales.ln1_eps_scales,
+                dec_scales.ln2_eps_scales,
+                dec_scales.ln3_eps_scales,
+                dec_scales.self_attn_out_scales,
+                dec_scales.cross_attn_out_scales,
+                dec_scales.ffn_out_scales,
             ):
                 layer: T5DecoderLayer
                 layer.ln1.eps *= ln1_eps_scale
                 layer.ln2.eps *= ln2_eps_scale
+                layer.ln3.eps *= ln3_eps_scale
                 # make residual smaller at the same time as we make a layer output smaller
                 layer.ln1.residual_scale = ln1_residual_scale
                 layer.ln2.residual_scale = ln2_residual_scale
+                layer.ln3.residual_scale = ln3_residual_scale
             dec.ln.eps *= enc_scales.final_norm_eps_scale
 
         modules: OrderedDict[str, torch.nn.Module] = OrderedDict()

@@ -187,15 +187,15 @@ def main():
     fuse_norms = True
 
     do_autocast = False
-    f32_enc: Optional[T5EncoderStack] = None
-    f16_enc: Optional[T5EncoderStack] = None
-    bf16_enc: Optional[T5EncoderStack] = None
+    f32_t5: Optional[T5] = None
+    f16_t5: Optional[T5] = None
+    bf16_t5: Optional[T5] = None
     f32_config: Optional[T5Config] = None
     f16_config: Optional[T5Config] = None
     bf16_config: Optional[T5Config] = None
     if f32_enabled := True:
         dtype: Optional[torch.dtype] = torch.float32 if f32_needs_cast else None
-        f32_enc, f32_config = get_model(f32_dir, dtype=dtype)
+        f32_t5, f32_config = get_model(f32_dir, dtype=dtype)
     if f16_enabled := True:
         dtype: Optional[torch.dtype] = torch.float16 if f16_needs_cast else None
         scaling_kwargs = {} if do_legacy_scaling else {
@@ -204,20 +204,20 @@ def main():
             'enc_attn_out_scales': attn_out_scale_dict[ckpt],
             'enc_ffn_out_scales': ffn_out_scale_dict[ckpt],
         }
-        f16_enc, f16_config = get_model(
+        f16_t5, f16_config = get_model(
             f16_dir,
             dtype=dtype,
             **scaling_kwargs,
         )
         if f16_acc_gpupoor := False:
             from gpu_poor.modules import LowPrecisionLinear
-            replace_linear(f16_enc, LowPrecisionLinear)
+            replace_linear(f16_t5, LowPrecisionLinear)
         if f16_acc_cublas_ops := False:
             from cublas_ops import CublasLinear
-            replace_linear(f16_enc, CublasLinear)
+            replace_linear(f16_t5, CublasLinear)
     if bf16_enabled := False:
         dtype: Optional[torch.dtype] = torch.bfloat16 if bf16_needs_cast else None
-        bf16_enc, bf16_config = get_model(bf16_dir)
+        bf16_t5, bf16_config = get_model(bf16_dir)
     
     print_first_block_only = False
 
@@ -227,10 +227,11 @@ def main():
     f16_activations: list[NamedActivation] = [] if retain_activations else VoidList()
     bf16_activations: list[NamedActivation] = [] if retain_activations else VoidList()
 
-    def instrument_nai_t5(module: T5EncoderStack, config: T5Config, out_list: list[NamedActivation], model_name: str) -> Callable[[], None]:
+    def instrument_nai_t5(module: T5, config: T5Config, out_list: list[NamedActivation], model_name: str) -> Callable[[], None]:
         from torch.nn import GELU, Embedding, Linear
         from nai_t5.t5_common import RMSNormCast, T5GEGLUFFN
         from nai_t5.t5_encoder import T5EncoderLayer
+        from nai_t5.t5_decoder import T5DecoderLayer
         handles: list[RemovableHandle] = []
         for name, mod in module.named_modules():
             match mod:
@@ -280,7 +281,7 @@ def main():
                             print(f'{model_name} {name:35s}:', stats(output))
                     handle: RemovableHandle = mod.register_forward_hook(partial(hook, name=name))
                     handles.append(handle)
-                case T5EncoderLayer():
+                case T5DecoderLayer() | T5EncoderLayer():
                     if print_first_block_only and name != 'layers.0': continue
                     def hook(mod, args, output, name: str):
                         # out_list.append(NamedActivation(name, output))
@@ -345,7 +346,7 @@ def main():
 
     tokenizer = SentencePieceProcessor(model_file=str(f32_dir / 'spiece.model'))
     
-    prompts: list[str] = ['hello world']
+    prompts: list[str] = ['Today is a fine <extra_id_0> on which to walk my <extra_id_1> in the park.']
     batch_size = len(prompts)
 
     toks: list[list[int]] = tokenizer.Encode(prompts, add_eos=True)
@@ -355,36 +356,65 @@ def main():
     for seq, input_out in zip(toks, input_ids.unbind()):
         input_out[:len(seq)].copy_(torch.tensor(seq[:ctx_len], dtype=torch.long))
     input_ids = input_ids.to(device)
-    mask: BoolTensor = input_ids != tokenizer.pad_id()
+    # input_mask: BoolTensor = input_ids != tokenizer.pad_id()
+    input_mask: BoolTensor = torch.arange(ctx_len, device=device).expand(batch_size, -1) < torch.tensor([len(seq) for seq in toks], device=device).unsqueeze(-1)
+    decoder_input_ids: LongTensor = torch.full((batch_size, 1), fill_value=tokenizer.pad_id(), dtype=torch.long, device=device)
+    decoder_input_mask: LongTensor = torch.ones_like(decoder_input_ids, dtype=torch.bool)
+    # decoder_cross_mask: LongTensor = torch.ones((batch_size, decoder_input_ids.size(-1), input_ids.size(-1)), dtype=torch.bool, device=device)
+    decoder_cross_mask: Optional[LongTensor] = None
 
     seed = 42
     with (
         inference_mode(),
-        fin(instrument_nai_t5(f32_enc, f32_config, f32_activations, ' f32')) if f32_enabled else nullcontext(),
-        fin(instrument_nai_t5(f16_enc, f16_config, f16_activations, ' f16')) if f16_enabled else nullcontext(),
-        fin(instrument_nai_t5(bf16_enc, bf16_config, bf16_activations, 'bf16')) if bf16_enabled else nullcontext(),
+        fin(instrument_nai_t5(f32_t5, f32_config, f32_activations, ' f32')) if f32_enabled else nullcontext(),
+        fin(instrument_nai_t5(f16_t5, f16_config, f16_activations, ' f16')) if f16_enabled else nullcontext(),
+        fin(instrument_nai_t5(bf16_t5, bf16_config, bf16_activations, 'bf16')) if bf16_enabled else nullcontext(),
         # sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION),
         # sdpa_kernel(SDPBackend.CUDNN_ATTENTION),
     ):
         torch.manual_seed(seed)
         if f32_enabled:
             with autocast(device_type=device.type, dtype=torch.float16) if do_autocast else nullcontext():
-                f32_out: FloatTensor = f32_enc(
+                f32_enc_out: FloatTensor = f32_t5.encoder(
                     input_ids=input_ids,
-                    input_mask=mask,
+                    input_mask=input_mask,
                 )
-            assert f32_out.isfinite().all(), 'f32_out has non-finite values'
+                assert f32_enc_out.isfinite().all(), 'f32_enc_out has non-finite values'
+                f32_dec_input_emb = f32_t5.encoder.vocab_embed(decoder_input_ids.flatten(end_dim=-2))
+                f32_dec_out: FloatTensor = f32_t5.decoder(
+                    f32_dec_input_emb,
+                    f32_enc_out,
+                    input_mask=decoder_input_mask,
+                    cross_mask=decoder_cross_mask,
+                )
+                f32_logits: FloatTensor = f32_t5.decoder.lm_head(f32_dec_out)
         if bf16_enabled:
-            bf16_out: FloatTensor = bf16_enc(
+            bf16_enc_out: FloatTensor = bf16_t5.encoder(
                 input_ids=input_ids,
-                input_mask=mask,
+                input_mask=input_mask,
             )
+            bf16_dec_input_emb = bf16_t5.encoder.vocab_embed(decoder_input_ids.flatten(end_dim=-2))
+            bf16_dec_out: FloatTensor = bf16_t5.decoder(
+                bf16_dec_input_emb,
+                bf16_enc_out,
+                input_mask=decoder_input_mask,
+                cross_mask=decoder_cross_mask,
+            )
+            bf16_logits: FloatTensor = bf16_t5.decoder.lm_head(bf16_dec_out)
         if f16_enabled:
-            f16_out: FloatTensor = f16_enc(
+            f16_enc_out: FloatTensor = f16_t5.encoder(
                 input_ids=input_ids,
-                input_mask=mask,
+                input_mask=input_mask,
             )
-            assert f16_out.isfinite().all(), 'f16_out has non-finite values'
+            assert f16_enc_out.isfinite().all(), 'f16_out has non-finite values'
+            f16_dec_input_emb = f16_t5.encoder.vocab_embed(decoder_input_ids.flatten(end_dim=-2))
+            f16_dec_out: FloatTensor = f16_t5.decoder(
+                f16_dec_input_emb,
+                f16_enc_out,
+                input_mask=decoder_input_mask,
+                cross_mask=decoder_cross_mask,
+            )
+            f16_logits: FloatTensor = f16_t5.decoder.lm_head(f16_dec_out)
     
     if f32_enabled:
         if bf16_enabled or f16_enabled:
@@ -392,11 +422,19 @@ def main():
             print("quantiles:")
             print(str(qs.cpu()).removeprefix("tensor(").removesuffix(")"))
         if f16_enabled:
-            print('f32 vs f16:')
-            explain_diff(f32_out, f16_out)
+            print('f32 vs f16 enc:')
+            explain_diff(f32_enc_out, f16_enc_out)
+            print('f32 vs f16 dec:')
+            explain_diff(f32_dec_out, f16_dec_out)
+            print('f32 vs f16 logits:')
+            explain_diff(f32_logits, f16_logits)
         if bf16_enabled:
-            print('f32 vs bf16:')
-            explain_diff(f32_out, bf16_out)
+            print('f32 vs bf16 enc:')
+            explain_diff(f32_enc_out, bf16_enc_out)
+            print('f32 vs bf16 dec:')
+            explain_diff(f32_dec_out, bf16_dec_out)
+            print('f32 vs bf16 logits:')
+            explain_diff(f32_logits, bf16_logits)
         if f32_activations and f16_activations:
             print("abs differences between f32, f16 layer activations...")
             torch.set_printoptions(linewidth=200)

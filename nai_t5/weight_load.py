@@ -1,13 +1,13 @@
 from nai_t5 import T5, T5Config
 from nai_t5.t5_encoder import T5EncoderStack, T5EncoderLayer
 from nai_t5.t5_decoder import T5DecoderStack, T5DecoderLayer
-from typing import Optional, OrderedDict, TYPE_CHECKING, Any, Protocol, Literal, Callable
-from dataclasses import dataclass
+from typing import Optional, OrderedDict, TYPE_CHECKING, Any, Protocol, Literal, Callable, NamedTuple, Sequence
+from dataclasses import dataclass, field
 from functools import partial
 import contextlib
 import torch
 from torch import FloatTensor, inference_mode
-from torch.nn import Linear
+from torch.nn import Linear, Module
 from tensorizer import TensorDeserializer, TensorType
 import re
 
@@ -138,6 +138,41 @@ def fuse_norm_scale(
     matmul_type = torch.float32 if scale_via_f32 else higher_type
     w.copy_(w.type(matmul_type) @ scale_diag.type(matmul_type))
 
+class FusionSpec(NamedTuple):
+    norm_weights: str
+    linear_weights: Sequence[str]
+
+@dataclass(frozen=True, slots=True)
+class FusionTask:
+    spec: FusionSpec
+    awaiting: set[str]
+    norm_fusion_via_f32: bool = False
+    weights: dict[str, FloatTensor] = field(init=False, default_factory=dict)
+    linears: dict[str, Linear] = field(init=False, default_factory=dict)
+    linear_attrs: dict[str, str] = field(init=False, default_factory=dict)
+
+    def accept(self, name: str, module: Module, attr: str, tensor: FloatTensor) -> bool:
+        assert name in self.awaiting
+        assert name not in self.weights
+        self.awaiting.remove(name)
+        self.weights[name] = tensor
+        if isinstance(module, Linear):
+            self.linears[name] = module
+            self.linear_attrs[name] = attr
+        if self.awaiting:
+            return False
+        ln_scale: FloatTensor = self.weights[self.spec.norm_weights]
+        for name, linear in self.linears.items():
+            linear_attr: str = self.linear_attrs[name]
+            weight: str = self.weights[name]
+            fuse_norm_scale(
+                w=weight,
+                ln_scale=ln_scale,
+                scale_via_f32=self.norm_fusion_via_f32,
+            )
+            linear.register_parameter(linear_attr, weight)
+        return True
+
 class FusingDeserializer(TensorDeserializer):
     def load_with_fusions(
         self,
@@ -250,46 +285,42 @@ class FusingDeserializer(TensorDeserializer):
         is_cross_o_proj = re.compile(r'layers\.(\d+)\.cross_attn\.o_proj\.weight$')
         is_ff_out = re.compile(r'layers\.(\d+)\.ffn\.ff_out\.weight$')
         if fuse_norm_scales:
-            is_ln1or2or3 = re.compile(r'layers\.(\d+)\.ln[123]\.weight$')
             enc_keys: tuple[str, ...] = keys if dec is None else tuple((k for k in keys if k.startswith('encoder.')))
             dec_keys: tuple[str, ...] = () if dec is None else tuple((k for k in keys if k.startswith('decoder.')))
-            enc_ln_wants_lin: dict[str, str] = {
-                **{k: k.replace('ln1', 'attn.qkv_proj') for k in enc_keys if re.search(is_ln1, k)},
-                **{k: k.replace('ln2', 'ffn.ff_in') for k in enc_keys if re.search(is_ln2, k)},
-            }
-            dec_ln_wants_lin: dict[str, str] = {} if dec is None else {
-                **{k: k.replace('ln1', 'self_attn.qkv_proj') for k in dec_keys if re.search(is_ln1, k)},
-                # TODO: presumably we need to fuse ln2's norm scale into cross_attn.kv_proj also, but algorithm doesn't support one-to-many yet
-                **{k: k.replace('ln2', 'cross_attn.q_proj') for k in dec_keys if re.search(is_ln2, k)},
-                **{k: k.replace('ln3', 'ffn.ff_in') for k in dec_keys if re.search(is_ln3, k)},
-            }
-            ln_wants_lin: dict[str, str] = {
-                **enc_ln_wants_lin,
-                **dec_ln_wants_lin,
-            }
-            lin_wants_ln: dict[str, str] = {v: k for k, v in ln_wants_lin.items()}
-            wants_norm_fusion: set[str] = ln_wants_lin.keys() | lin_wants_ln.keys()
-        else:
-            wants_norm_fusion: set[str] = {}
-
-        pending_fusion: dict[str, AcceptFusion] = {}
-
-        def fuse_me(
-            w_name: str,
-            w_mod: Linear,
-            w_attr: str,
-            w: FloatTensor,
-            s_name: str,
-            ln_scale: FloatTensor,
-        ) -> None:
-            fuse_norm_scale(
-                w=w,
-                ln_scale=ln_scale,
-                scale_via_f32=norm_fusion_via_f32,
+            enc_fusions: tuple[FusionSpec, ...] = tuple((FusionSpec(
+                norm_weights=norm,
+                linear_weights=(lin,),
+            ) for norm, lin in (
+                *((k, k.replace('ln1', 'attn.qkv_proj')) for k in enc_keys if re.search(is_ln1, k)),
+                *((k, k.replace('ln2', 'ffn.ff_in')) for k in enc_keys if re.search(is_ln2, k)),
+            )))
+            dec_fusions: tuple[FusionSpec, ...] = (
+                *(FusionSpec(
+                    norm_weights=norm,
+                    linear_weights=(lin,),
+                ) for norm, lin in (
+                    *((k, k.replace('ln1', 'self_attn.qkv_proj')) for k in dec_keys if re.search(is_ln1, k)),
+                    *((k, k.replace('ln3', 'ffn.ff_in')) for k in dec_keys if re.search(is_ln3, k)),
+                )),
+                *(FusionSpec(
+                    norm_weights=k,
+                    linear_weights=(
+                        k.replace('ln2', 'cross_attn.q_proj'),
+                        k.replace('ln2', 'cross_attn.kv_proj'),
+                    ),
+                ) for k in dec_keys if re.search(is_ln2, k)),
             )
-            w_mod.register_parameter(w_attr, w)
-            wants_norm_fusion.remove(s_name)
-            wants_norm_fusion.remove(w_name)
+            fusions: tuple[FusionSpec, ...] = enc_fusions + dec_fusions
+            pending_fusions: tuple[FusionTask, ...] = tuple((FusionTask(
+                spec=spec,
+                awaiting=set((spec.norm_weights, *spec.linear_weights)),
+                norm_fusion_via_f32=norm_fusion_via_f32,
+            )) for spec in fusions)
+            name_to_fusion: dict[str, FusionTask] = {
+                name: task for task in pending_fusions for name in task.awaiting
+            }
+        else:
+            name_to_fusion: dict[str, FusionTask] = {}
 
         tensor_ct = len(keys)
 
@@ -347,19 +378,12 @@ class FusingDeserializer(TensorDeserializer):
                         out_scale: float = dec_scales.ffn_out_scales_cp_hat[layer_idx]
 
                 if entry.type is param_type:
-                    if name in wants_norm_fusion:
-                        if re.search(is_ln1or2or3, name):
-                            counterpart_dict: dict[str, str] = ln_wants_lin
-                            fuse_kwargs = { 's_name': name, 'ln_scale': tensor }
-                        else:
-                            counterpart_dict: dict[str, str] = lin_wants_ln
-                            fuse_kwargs = { 'w_mod': module, 'w_name': name, 'w_attr': attr, 'w': tensor }
-                        if name in pending_fusion:
-                            pending_fusion[name](**fuse_kwargs)
-                            del pending_fusion[name]
-                        else:
-                            counterpart: str = counterpart_dict[name]
-                            pending_fusion[counterpart] = partial(fuse_me, **fuse_kwargs)
+                    if name in name_to_fusion:
+                        task: FusionTask = name_to_fusion[name]
+                        completed = task.accept(name, module, attr, tensor)
+                        if completed:
+                            for name in (task.spec.norm_weights, *task.spec.linear_weights):
+                                del name_to_fusion[name]
                     else:
                         if out_scale is not None and out_scale != 1:
                             tensor.mul_(out_scale)
@@ -368,7 +392,7 @@ class FusingDeserializer(TensorDeserializer):
                     module.register_buffer(attr, tensor)
 
         self._file.close()
-        assert not wants_norm_fusion, f"Unfused: {wants_norm_fusion}"
+        assert not name_to_fusion, f"Unfused: {tuple(name_to_fusion.keys())}"
         return tensor_ct
 
     

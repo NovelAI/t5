@@ -234,6 +234,7 @@ def replace_norms(mod: Module) -> None:
     """
     from transformers.models.t5.modeling_t5 import T5LayerNorm
     from transformers.models.umt5.modeling_umt5 import UMT5LayerNorm
+    from torch.nn import RMSNorm
     for child_name, child_mod in mod.named_children():
         # print(child_name, child_mod.__class__.__name__)
         match child_mod:
@@ -246,7 +247,15 @@ def replace_norms(mod: Module) -> None:
                     normalized_shape = child_mod.weight.size(-1)
                     eps = child_mod.variance_epsilon
                     elementwise_affine = True
-                norm = RMSNormCast(
+                # norm = RMSNormCast(
+                #     normalized_shape,
+                #     eps=eps,
+                #     elementwise_affine=elementwise_affine,
+                #     device=child_mod.weight.device,
+                #     dtype=child_mod.weight.dtype,
+                # )
+                # actually let's replace it with the superclass we delegate to
+                norm = RMSNorm(
                     normalized_shape,
                     eps=eps,
                     elementwise_affine=elementwise_affine,

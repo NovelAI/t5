@@ -118,11 +118,15 @@ def main():
     batch_size = 1
     use_based_encoder = True
     use_based_decoder = True
+    if not run_hf_baseline:
+        if use_based_encoder:
+            hf_t5.encoder.to(device)
+        if use_based_decoder:
+            hf_t5.decoder.to(device)
     with inference_mode(), autocast(device_type=device.type, dtype=torch.bfloat16):
         if use_based_encoder:
             encoding: FloatTensor = my_t5.encoder(input_ids, input_mask=input_ids_mask.bool())
         else:
-            hf_t5.to(device)
             encoding: FloatTensor = hf_t5.encoder.forward(
                 input_ids=input_ids, attention_mask=input_ids_mask
             ).last_hidden_state

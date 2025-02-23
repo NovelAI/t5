@@ -81,7 +81,13 @@ def get_model(
     with torch.device('meta'):
         encdec: T5 = T5(config).eval()
 
-    if enc_ffn_out_scales is not None or enc_attn_out_scales is not None:
+    if (
+        enc_ffn_out_scales is not None or
+        enc_attn_out_scales is not None or
+        dec_self_attn_out_scales is not None or
+        dec_cross_attn_out_scales is not None or
+        dec_ffn_out_scales is not None
+    ):
         deserializer = FusingDeserializer(dir / 'encdec.tensors', lazy_load=True, dtype=dtype)
         deserializer.load_with_fusions(
             encdec,

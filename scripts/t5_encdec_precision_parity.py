@@ -163,9 +163,9 @@ dec_cross_attn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
     Checkpoint.T5v1_1XXL: None,
 }
 
-dec_cross_ffn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
+dec_ffn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
     # 8 layers
-    Checkpoint.T5v1_1Small: None,
+    Checkpoint.T5v1_1Small: [*[1]*2, 1/2, *[1]*5],
     # 24 layers
     Checkpoint.T5v1_1XL: None,
     # 24 layers
@@ -235,7 +235,7 @@ def main():
             enc_ffn_out_scales=enc_ffn_out_scale_dict[ckpt],
             dec_self_attn_out_scales=dec_self_attn_out_scale_dict[ckpt],
             dec_cross_attn_out_scales=dec_cross_attn_out_scale_dict[ckpt],
-            dec_ffn_out_scales=dec_cross_ffn_out_scale_dict[ckpt],
+            dec_ffn_out_scales=dec_ffn_out_scale_dict[ckpt],
         )
         if f16_acc_gpupoor := False:
             from gpu_poor.modules import LowPrecisionLinear

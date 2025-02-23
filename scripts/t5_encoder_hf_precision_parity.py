@@ -166,6 +166,51 @@ class PrecisionMode(str, Enum):
     PureBF16 = 'pure-bf16'
     PureFP16 = 'pure-fp16'
 
+def get_hf_model(
+    ckpt: Checkpoint,
+    precision_mode: PrecisionMode,
+    device: torch.device | str | int,
+    do_replace_norms = False,
+    do_replace_gates = False,
+) -> HFT5EncoderModel | UMT5EncoderModel:
+    hf_model_name: str = ckpt_to_hf_model_name[ckpt]
+    is_umt5: bool = ckpt_is_umt5[ckpt]
+
+    match precision_mode:
+        case PrecisionMode.Float32 | PrecisionMode.MixedBF16 | PrecisionMode.MixedFP16:
+            hf_dtype_kwargs = {}
+        case PrecisionMode.PureBF16:
+            hf_dtype_kwargs = {'torch_dtype': torch.bfloat16}
+        case PrecisionMode.PureFP16:
+            hf_dtype_kwargs = {'torch_dtype': torch.float16}
+        case _:
+            raise ValueError(f"Invalid precision mode: {precision_mode}")
+
+    hf_enc: HFT5EncoderModel | UMT5EncoderModel
+    if is_umt5:
+        hf_enc = UMT5EncoderModel.from_pretrained(hf_model_name, **hf_dtype_kwargs, device_map=device).eval()
+    else:
+        hf_enc = HFT5EncoderModel.from_pretrained(hf_model_name, **hf_dtype_kwargs, device_map=device).eval()
+    
+    # make HF's norms and gates match ours, so that we're only comparing "everything else" (we already know our norms and gates are subtly different)
+    if do_replace_norms:
+        replace_norms(hf_enc)
+    if do_replace_gates:
+        replace_gates(hf_enc)
+    
+    return hf_enc
+
+def get_autocast_ctx(precision_mode: Optional[PrecisionMode], device: torch.device) -> autocast | nullcontext:
+    match precision_mode:
+        case None | PrecisionMode.Float32 | PrecisionMode.PureBF16 | PrecisionMode.PureFP16:
+            return nullcontext()
+        case PrecisionMode.MixedFP16:
+            return autocast(device_type=device.type, dtype=torch.float16)
+        case PrecisionMode.MixedBF16:
+            return autocast(device_type=device.type, dtype=torch.bfloat16)
+        case _:
+            raise ValueError(f"Invalid precision mode: {precision_mode}")
+
 def main():
     device = torch.device("cuda")
 
@@ -200,35 +245,38 @@ def main():
         case _:
             raise ValueError(f'unknown checkpoint: {ckpt}')
 
-    # hf_precision_mode = PrecisionMode.Float32
+    # we'll consider this the reference impl
+    hf_precision_mode = PrecisionMode.Float32
     # hf_precision_mode = PrecisionMode.MixedBF16
-    hf_precision_mode = PrecisionMode.PureBF16
+    # hf_precision_mode = PrecisionMode.MixedFP16
+    # hf_precision_mode = PrecisionMode.PureBF16
+
+    # also let us compare HF against itself
+    hf_alt_precision_mode: Optional[PrecisionMode]
+    # hf_alt_precision_mode = None
+    hf_alt_precision_mode = PrecisionMode.PureBF16
+    # hf_alt_precision_mode = PrecisionMode.MixedBF16
+    # hf_alt_precision_mode = PrecisionMode.MixedFP16
+    # hf_alt_precision_mode = PrecisionMode.PureFP16
         
     nai_f32_precision_mode = hf_precision_mode
 
-    match hf_precision_mode:
-        case PrecisionMode.Float32 | PrecisionMode.MixedBF16 | PrecisionMode.MixedFP16:
-            hf_dtype_kwargs = {}
-        case PrecisionMode.PureBF16:
-            hf_dtype_kwargs = {'torch_dtype': torch.bfloat16}
-        case PrecisionMode.PureFP16:
-            hf_dtype_kwargs = {'torch_dtype': torch.float16}
-        case _:
-            raise ValueError(f"Invalid precision mode: {hf_precision_mode}")
-
-    hf_model_name: str = ckpt_to_hf_model_name[ckpt]
-    is_umt5: bool = ckpt_is_umt5[ckpt]
-    hf_encoder: HFT5EncoderModel | UMT5EncoderModel
-    if is_umt5:
-        hf_encoder = UMT5EncoderModel.from_pretrained(hf_model_name, **hf_dtype_kwargs, device_map=device).eval()
-    else:
-        hf_encoder = HFT5EncoderModel.from_pretrained(hf_model_name, **hf_dtype_kwargs, device_map=device).eval()
-
-    # make HF's norms and gates match ours, so that we're only comparing "everything else" (we already know our norms and gates are subtly different)
-    if do_hf_replace_norms := True:
-        replace_norms(hf_encoder)
-    if do_hf_replace_gates := True:
-        replace_gates(hf_encoder)
+    hf_enc: HFT5EncoderModel | UMT5EncoderModel = get_hf_model(
+        ckpt,
+        precision_mode=hf_precision_mode,
+        device=device,
+        do_replace_norms=True,
+        do_replace_gates=True,
+    )
+    hf_alt_enc: HFT5EncoderModel | UMT5EncoderModel | None = None
+    if hf_alt_precision_mode is not None:
+        hf_alt_enc: HFT5EncoderModel | UMT5EncoderModel = get_hf_model(
+            ckpt,
+            precision_mode=hf_alt_precision_mode,
+            device=device,
+            do_replace_norms=True,
+            do_replace_gates=True,
+        )
 
     fuse_norms = True
 
@@ -240,7 +288,7 @@ def main():
     bf16_config: Optional[T5Config] = None
     # load if you intend to invoke the model, or if you intend to use it as a weight donor.
     # if you're loading it anyway, then we designate it as avaiable for weight donation too.
-    if f32_enabled := True:
+    if f32_enabled := False:
         dtype: Optional[torch.dtype] = torch.float32 if f32_needs_cast else None
         f32_enc, f32_config = get_model(f32_dir, dtype=dtype)
     if f16_enabled := True:
@@ -404,29 +452,15 @@ def main():
     input_ids = input_ids.to(device)
     mask: BoolTensor = input_ids != tokenizer.pad_id()
 
-    match hf_precision_mode:
-        case PrecisionMode.Float32 | PrecisionMode.PureBF16:
-            hf_autocast_ctx = nullcontext()
-        case PrecisionMode.MixedBF16:
-            hf_autocast_ctx = autocast(device_type=device.type, dtype=torch.bfloat16)
-        case _:
-            raise ValueError(f"Invalid precision mode: {hf_precision_mode}")
-        
-    match nai_f32_precision_mode:
-        case PrecisionMode.Float32 | PrecisionMode.PureBF16 | PrecisionMode.PureFP16:
-            nai_autocast_ctx = nullcontext()
-        case PrecisionMode.MixedFP16:
-            nai_autocast_ctx = autocast(device_type=device.type, dtype=torch.float16)
-        case PrecisionMode.MixedBF16:
-            nai_autocast_ctx = autocast(device_type=device.type, dtype=torch.bfloat16)
-        case _:
-            raise ValueError(f"Invalid precision mode: {hf_precision_mode}")
+    hf_autocast_ctx = get_autocast_ctx(hf_precision_mode, device)
+    hf_alt_autocast_ctx = get_autocast_ctx(hf_alt_precision_mode, device)
+    nai_autocast_ctx = get_autocast_ctx(nai_f32_precision_mode, device)
 
     seed = 42
     with inference_mode():
         torch.manual_seed(seed)
         with hf_autocast_ctx:
-            hf_out_all: BaseModelOutputWithPastAndCrossAttentions = hf_encoder(
+            hf_out_all: BaseModelOutputWithPastAndCrossAttentions = hf_enc(
                 input_ids=input_ids,
                 attention_mask=mask,
                 head_mask=None,
@@ -437,6 +471,20 @@ def main():
             )
             hf_out: FloatTensor = hf_out_all.last_hidden_state
             assert hf_out.isfinite().all(), 'hf_out has non-finite values'
+        if hf_alt_enc is not None:
+            torch.manual_seed(seed)
+            with hf_alt_autocast_ctx:
+                hf_alt_out_all: BaseModelOutputWithPastAndCrossAttentions = hf_alt_enc(
+                    input_ids=input_ids,
+                    attention_mask=mask,
+                    head_mask=None,
+                    inputs_embeds=None,
+                    output_attentions=None,
+                    output_hidden_states=None,
+                    return_dict=None,
+                )
+                hf_alt_out: FloatTensor = hf_alt_out_all.last_hidden_state
+                assert hf_alt_out.isfinite().all(), 'hf_alt_out has non-finite values'
         with (
             fin(instrument_nai_t5(f32_enc, f32_config, f32_activations, ' f32')) if f32_enabled else nullcontext(),
             fin(instrument_nai_t5(f16_enc, f16_config, f16_activations, ' f16')) if f16_enabled else nullcontext(),
@@ -466,10 +514,12 @@ def main():
                 )
                 assert f16_out.isfinite().all(), 'f16_out has non-finite values'
     
-    if bf16_enabled or f16_enabled:
-        qs = torch.tensor([.5, .75, .9, .95, .99, .999, .9999], device=device)
-        print("quantiles:")
-        print(str(qs.cpu()).removeprefix("tensor(").removesuffix(")"))
+    qs = torch.tensor([.5, .75, .9, .95, .99, .999, .9999], device=device)
+    print("absmax diff quantiles:")
+    print(str(qs.cpu()).removeprefix("tensor(").removesuffix(")"))
+    if hf_alt_enc is not None:
+        print(f'HF {hf_precision_mode.value} vs HF {hf_alt_precision_mode.value}:')
+        explain_diff(hf_out, hf_alt_out)
     if f32_enabled:
         print(f'HF {hf_precision_mode.value} vs NAI f32:')
         explain_diff(hf_out, f32_out)

@@ -138,7 +138,7 @@ class VoidList(list[T]):
 
 enc_ffn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
     # 8 layers
-    Checkpoint.T5v1_1Small: None,
+    Checkpoint.T5v1_1Small: [*[1]*6, 1/2, 1/2],
     # 24 layers
     Checkpoint.T5v1_1XL: [*[1]*4, 1/8, *[1]*19],
     # 24 layers

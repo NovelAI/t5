@@ -49,6 +49,7 @@
             "subProcess": true,
             "args": [],
             "env": {
+                "HF_HUB_ENABLE_HF_TRANSFER": "1",
                 "TORCH_COMPILE_DISABLE": "1",
                 "TORCHINDUCTOR_COMPILE_THREADS": "1",
             }
@@ -77,6 +78,7 @@
             "subProcess": true,
             "args": [],
             "env": {
+                "HF_HUB_ENABLE_HF_TRANSFER": "1",
                 "TORCH_COMPILE_DISABLE": "1",
                 "TORCHINDUCTOR_COMPILE_THREADS": "1",
             }
@@ -105,6 +107,7 @@
             "subProcess": true,
             "args": [],
             "env": {
+                "HF_HUB_ENABLE_HF_TRANSFER": "1",
                 "TORCH_COMPILE_DISABLE": "1",
                 "TORCHINDUCTOR_COMPILE_THREADS": "1",
             }
@@ -119,6 +122,7 @@
             "subProcess": true,
             "args": [],
             "env": {
+                "HF_HUB_ENABLE_HF_TRANSFER": "1",
                 "TORCH_COMPILE_DISABLE": "1",
                 "TORCHINDUCTOR_COMPILE_THREADS": "1",
             }

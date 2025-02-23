@@ -98,12 +98,26 @@
             }
         },
         {
+            "name": "T5 enc-dec precision parity",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "scripts.t5_encdec_precision_parity",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "args": [],
+            "env": {
+                "TORCH_COMPILE_DISABLE": "1",
+                "TORCHINDUCTOR_COMPILE_THREADS": "1",
+            }
+        },
+        {
             "name": "T5 sampling (HF generate vs greedy loop)",
             "type": "debugpy",
             "request": "launch",
             "module": "scripts.t5_sampling_hf_generate",
             "console": "integratedTerminal",
-            "justMyCode": false,
+            "justMyCode": true,
             "subProcess": true,
             "args": [],
             "env": {

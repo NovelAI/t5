@@ -363,14 +363,14 @@ class RMSNormCast(RMSNorm):
         prenorm=True,
     ) -> ActAndResidual | FloatTensor:
         orig_dtype = x.dtype
-        next_residual = x
-        x = x.float()
-        if residual is not None:
-            x = x + residual.float()
-        normed: FloatTensor = super().forward(x).type(orig_dtype)
+        x32 = x.float()
+        if residual is None:
+            next_residual = x32 if self.residual_in_fp32 else x
+        else:
+            x32 = x32 + residual.float()
+            next_residual = x32.type(torch.float32 if self.residual_in_fp32 else orig_dtype)
+        normed: FloatTensor = super().forward(x32).type(orig_dtype)
         if prenorm:
-            if self.residual_in_fp32:
-                next_residual = next_residual.float()
             if self.residual_scale is not None:
                 next_residual = next_residual * self.residual_scale
             return ActAndResidual(normed, next_residual)

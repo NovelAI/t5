@@ -7,7 +7,15 @@ from torch import BoolTensor, FloatTensor, inference_mode, nn
 from torch.nn import Linear
 from torch.nn.functional import scaled_dot_product_attention
 
-from .t5_common import RMSNormCast, T5GEGLUFFN, T5Config, T5RelativeAttentionBias, T5ReLUFFN, get_ffn_factory
+from .t5_common import (
+    ActAndResidual,
+    RMSNormCast,
+    T5GEGLUFFN,
+    T5Config,
+    T5RelativeAttentionBias,
+    T5ReLUFFN,
+    get_ffn_factory,
+)
 
 ####
 #### T5 decoder cross-attention
@@ -200,34 +208,25 @@ class T5DecoderLayer(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,
+        x_r: ActAndResidual,
         encoding: FloatTensor,
         self_attn_bias: FloatTensor,
         cross_attn_mask: Optional[BoolTensor] = None,
         self_past_kv: Optional[FloatTensor] = None,
         cross_kv: Optional[FloatTensor] = None,
-    ) -> FloatTensor:
-        residual = x
-        x = self.ln1(x)
-        self_attn_out: FloatTensor = self.self_attn(
+    ) -> ActAndResidual:
+        x, residual = x_r
+        x, residual = self.ln1(x, residual=residual)
+        x = self.self_attn(
             x,
             bias=self_attn_bias,
             past_kv=self_past_kv,
         )
-
-        x = residual + self.dropout(self_attn_out)
-
-        residual = x
-        x = self.ln2(x)
-        cross_attn_out: FloatTensor = self.cross_attn(x, encoding, mask=cross_attn_mask, kv=cross_kv)
-        x = residual + self.dropout(cross_attn_out)
-
-        residual = x
-        x = self.ffn(self.ln3(x))
-
-        x = residual + self.dropout(x)
-
-        return x
+        x, residual = self.ln2(self.dropout(x), residual=residual)
+        x = self.cross_attn(x, encoding, mask=cross_attn_mask, kv=cross_kv)
+        x, residual = self.ln3(self.dropout(x), residual=residual)
+        x = self.ffn(x)
+        return ActAndResidual(self.dropout(x), residual)
 
     def init_weights(self, generator: Optional[torch.Generator] = None) -> None:
         self.self_attn.init_weights(generator)
@@ -335,8 +334,6 @@ class T5DecoderStack(nn.Module):
             # broadcast over all heads (b h q k)
             cross_mask = rearrange(cross_mask, "b q k -> b 1 q k")
 
-        x: FloatTensor = self.dropout(input_embeds)
-
         # UMT5 has a position embedding per layer, and we computed all of them simultaneously
         # note: [e]*n does not duplicate tensors, it just makes a list of n references to the same tensor
         self_biases: list[FloatTensor] = self_attn_bias.unbind() if self.config.pos_emb_per_layer else [self_attn_bias]*self.config.num_layers
@@ -347,18 +344,20 @@ class T5DecoderStack(nn.Module):
         layer_cross_kvs: List[Optional[FloatTensor]] = (
             [None] * len(self.layers) if cross_kv is None else cross_kv.unbind()
         )
+        x_r = ActAndResidual(self.dropout(input_embeds), None)
         for layer, layer_self_kv, layer_cross_kv, self_bias in zip(self.layers, layer_self_kvs, layer_cross_kvs, self_biases):
             assert isinstance(layer, T5DecoderLayer)
-            x: FloatTensor = layer(
-                x,
+            x_r = layer(
+                x_r,
                 encoding,
                 self_attn_bias=self_bias,
                 cross_attn_mask=cross_mask,
                 self_past_kv=layer_self_kv,
                 cross_kv=layer_cross_kv,
             )
-        x: FloatTensor = self.ln(x)
-        x: FloatTensor = self.dropout(x)
+        x, residual = x_r
+        x = self.ln(x, residual=residual, prenorm=False)
+        x = self.dropout(x)
         return x
 
     def get_kv_cache(

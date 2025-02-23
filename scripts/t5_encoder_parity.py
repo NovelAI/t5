@@ -32,6 +32,14 @@ def stat(t: Tensor, label: Optional[str] = None) -> None:
     print(tuple(t.shape), str(t.dtype).removeprefix('torch.'), f'σ={t.std().item():g}', f'μ={t.mean().item():.2f}', f'norm={fmt_matrix_norm(matrix_norm(t.float(), ord=2))}', f'absmax={t.abs().max().item():g}', label or '')
 
 
+def explain_diff(ref: FloatTensor, candidate: FloatTensor) -> FloatTensor:
+    diff = ref.float().sub(candidate.float())
+    qs = torch.tensor([.5, .75, .9, .95, .99, .999, .9999], device=ref.device)
+    q = diff.abs().quantile(qs)
+    print(str(q.cpu()).removeprefix("tensor(").removesuffix(")"))
+    stat(diff, 'diff')
+
+
 class PrecisionMode(str, Enum):
     Float32 = 'float32'
     MixedBF16 = 'mixed-bf16'
@@ -110,10 +118,10 @@ def main():
     compare_dtype = torch.promote_types(my_encoder_out.dtype, hf_enc_out["last_hidden_state"].dtype)
     hf_cast: FloatTensor = hf_enc_out["last_hidden_state"].type(compare_dtype)
     my_cast: FloatTensor = my_encoder_out.type(compare_dtype)
-    diff = hf_cast.float().sub(my_cast.float())
-    rdiff = torch.maximum(hf_cast, my_cast).float().div(torch.minimum(hf_cast, my_cast).float()).nan_to_num()
-    stat(diff, 'diff')
-    stat(rdiff, 'rdiff')
+    qs = torch.tensor([.5, .75, .9, .95, .99, .999, .9999], device=device)
+    print("quantiles:")
+    print(str(qs.cpu()).removeprefix("tensor(").removesuffix(")"))
+    explain_diff(hf_cast, my_cast)
     assert hf_cast.allclose(my_cast), "HF and NAI outputs do not match"
     pass  # somewhere to put your breakpoint
 

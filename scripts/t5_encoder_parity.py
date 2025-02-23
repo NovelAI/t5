@@ -55,21 +55,25 @@ def main():
     hf_config: T5ConfigHF = T5ConfigHF.from_pretrained(hf_model_name)
     hf_tokenizer: T5TokenizerFast = T5TokenizerFast.from_pretrained(hf_model_name, legacy=False)
 
-    # precision_mode = PrecisionMode.Float32
-    # precision_mode = PrecisionMode.MixedBF16
-    precision_mode = PrecisionMode.PureBF16
-    match precision_mode:
+    # hf_precision_mode = PrecisionMode.Float32
+    # hf_precision_mode = PrecisionMode.MixedBF16
+    hf_precision_mode = PrecisionMode.PureBF16
+
+    # my_precision_mode = PrecisionMode.Float32
+    # my_precision_mode = PrecisionMode.MixedBF16
+    my_precision_mode = PrecisionMode.PureBF16
+    match hf_precision_mode:
         case PrecisionMode.Float32 | PrecisionMode.MixedBF16:
             hf_dtype_kwargs = {}
         case PrecisionMode.PureBF16:
             hf_dtype_kwargs = {'torch_dtype': torch.bfloat16}
         case _:
-            raise ValueError(f"Invalid precision mode: {precision_mode}")
+            raise ValueError(f"Invalid precision mode: {hf_precision_mode}")
     
     hf_encoder = HFT5EncoderModel.from_pretrained(hf_model_name, **hf_dtype_kwargs).eval()
 
     my_config: T5Config = to_based_config(hf_config, n_tokens=hf_tokenizer.model_max_length)
-    if precision_mode == PrecisionMode.PureBF16:
+    if my_precision_mode == PrecisionMode.PureBF16:
         my_config.linear_weight_dtype = torch.bfloat16
         my_config.emb_weight_dtype = torch.bfloat16
         my_config.norm_weight_dtype = torch.bfloat16
@@ -89,32 +93,42 @@ def main():
     my_encoder.to(device)
     hf_encoder.to(device)
 
-    match precision_mode:
+    match hf_precision_mode:
         case PrecisionMode.Float32 | PrecisionMode.PureBF16:
-            autocast_ctx = nullcontext()
+            hf_autocast_ctx = nullcontext()
         case PrecisionMode.MixedBF16:
-            autocast_ctx = autocast(device_type=device.type, dtype=torch.bfloat16)
+            hf_autocast_ctx = autocast(device_type=device.type, dtype=torch.bfloat16)
         case _:
-            raise ValueError(f"Invalid precision mode: {precision_mode}")
+            raise ValueError(f"Invalid precision mode: {hf_precision_mode}")
+    match my_precision_mode:
+        case PrecisionMode.Float32 | PrecisionMode.PureBF16:
+            my_autocast_ctx = nullcontext()
+        case PrecisionMode.MixedBF16:
+            my_autocast_ctx = autocast(device_type=device.type, dtype=torch.bfloat16)
+        case _:
+            raise ValueError(f"Invalid precision mode: {my_precision_mode}")
 
     seed = 42
-    with inference_mode(), autocast_ctx:
+    with inference_mode():
         # seed the random, so that we can parity-test things like dropout (if enabled)
         torch.manual_seed(seed)
-        hf_enc_out: BaseModelOutputWithPastAndCrossAttentions = hf_encoder(
-            input_ids=tokens.input_ids,  # [1, 3]
-            attention_mask=tokens.attention_mask,  # [1, 3]
-            head_mask=None,
-            inputs_embeds=None,
-            output_attentions=None,
-            output_hidden_states=None,
-            return_dict=None,
-        )
+        with hf_autocast_ctx:
+            hf_enc_out: BaseModelOutputWithPastAndCrossAttentions = hf_encoder(
+                input_ids=tokens.input_ids,  # [1, 3]
+                attention_mask=tokens.attention_mask,  # [1, 3]
+                head_mask=None,
+                inputs_embeds=None,
+                output_attentions=None,
+                output_hidden_states=None,
+                return_dict=None,
+            )
+
         torch.manual_seed(seed)
-        my_encoder_out: FloatTensor = my_encoder(
-            input_ids=tokens.input_ids,
-            input_mask=tokens.attention_mask.bool(),
-        )
+        with my_autocast_ctx:
+            my_encoder_out: FloatTensor = my_encoder(
+                input_ids=tokens.input_ids,
+                input_mask=tokens.attention_mask.bool(),
+            )
     compare_dtype = torch.promote_types(my_encoder_out.dtype, hf_enc_out["last_hidden_state"].dtype)
     hf_cast: FloatTensor = hf_enc_out["last_hidden_state"].type(compare_dtype)
     my_cast: FloatTensor = my_encoder_out.type(compare_dtype)

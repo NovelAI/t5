@@ -116,24 +116,24 @@ def main():
     torch.manual_seed(seed)
 
     batch_size = 1
-    use_based = True
+    use_based_encoder = True
+    use_based_decoder = True
     with inference_mode(), autocast(device_type=device.type, dtype=torch.bfloat16):
-        if use_based:
+        if use_based_encoder:
             encoding: FloatTensor = my_t5.encoder(input_ids, input_mask=input_ids_mask.bool())
-
-            cross_mask = rearrange(input_ids_mask.bool(), "b k -> b 1 k")
-            cross_mask = cross_mask.expand(-1, max_new_tokens, -1)
-
-            decoder_input_mask = encoding.new_ones((batch_size, max_new_tokens), dtype=torch.bool)
         else:
             hf_t5.to(device)
             encoding: FloatTensor = hf_t5.encoder.forward(
                 input_ids=input_ids, attention_mask=input_ids_mask
             ).last_hidden_state
+        if use_based_decoder:
+            decoder_input_mask = encoding.new_ones((batch_size, max_new_tokens), dtype=torch.bool)
+            cross_mask = rearrange(input_ids_mask.bool(), "b k -> b 1 k")
+            cross_mask = cross_mask.expand(-1, max_new_tokens, -1)
 
     def decode(in_tokens: LongTensor, encoding: FloatTensor, input_ids_mask: BoolTensor) -> FloatTensor:
         with inference_mode(), autocast(device_type=device.type, dtype=torch.bfloat16):
-            if use_based:
+            if use_based_decoder:
                 decoder_input_embeds: FloatTensor = my_t5.encoder.vocab_embed(in_tokens)
                 input_mask: BoolTensor = decoder_input_mask[:, : in_tokens.size(-1)]
                 cross_mask_: BoolTensor = cross_mask[:, : in_tokens.size(-1), :]
@@ -174,12 +174,12 @@ def main():
         my_acc.append(token_id)
         assert (
             token_id == expected_tok
-        ), f"our sampler's output (sampling from {'NAI' if use_based else 'HF'}) diverged from HF output at prediction index {ix}. Expected token {expected_tok} ({hf_tokenizer.convert_ids_to_tokens(expected_tok)}). actual: {token_id} ({token_str})"
+        ), f"our sampler's output (sampling from {'NAI' if use_based_encoder else 'HF'} encoder, {'NAI' if use_based_decoder else 'HF'} decoder) diverged from HF output at prediction index {ix}. Expected token {expected_tok} ({hf_tokenizer.convert_ids_to_tokens(expected_tok)}). actual: {token_id} ({token_str})"
     else:
         print("", flush=True)
         assert (
             my_acc == generate_out[0, 1:].tolist()
-        ), f"our sampler's output (sampling from {'NAI' if use_based else 'HF'}) diverged from HF output"
+        ), f"our sampler's output (sampling from {'NAI' if use_based_encoder else 'HF'} encoder, {'NAI' if use_based_decoder else 'HF'} decoder) diverged from HF output"
     pass  # somewhere to put your breakpoint
 
 

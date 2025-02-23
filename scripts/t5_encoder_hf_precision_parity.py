@@ -265,8 +265,8 @@ def main():
         ckpt,
         precision_mode=hf_precision_mode,
         device=device,
-        do_replace_norms=True,
-        do_replace_gates=True,
+        do_replace_norms=False,
+        do_replace_gates=False,
     )
     hf_alt_enc: HFT5EncoderModel | UMT5EncoderModel | None = None
     if hf_alt_precision_mode is not None:
@@ -274,8 +274,8 @@ def main():
             ckpt,
             precision_mode=hf_alt_precision_mode,
             device=device,
-            do_replace_norms=True,
-            do_replace_gates=True,
+            do_replace_norms=False,
+            do_replace_gates=False,
         )
 
     fuse_norms = True

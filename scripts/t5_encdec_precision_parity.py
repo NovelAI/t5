@@ -130,7 +130,7 @@ class VoidList(list[T]):
     def append(self, _: T) -> None:
         pass
 
-ffn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
+enc_ffn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
     # 8 layers
     Checkpoint.T5v1_1Small: [*[1]*6, 1/8, 1],
     # 24 layers
@@ -139,9 +139,36 @@ ffn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
     Checkpoint.T5v1_1XXL: [*[1]*10, 1/4, *[1]*13],
 }
 
-attn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
+enc_attn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
     Checkpoint.T5v1_1Small: None,
     Checkpoint.T5v1_1XL: None,
+    Checkpoint.T5v1_1XXL: None,
+}
+
+dec_self_attn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
+    # 8 layers
+    Checkpoint.T5v1_1Small: None,
+    # 24 layers
+    Checkpoint.T5v1_1XL: None,
+    # 24 layers
+    Checkpoint.T5v1_1XXL: None,
+}
+
+dec_cross_attn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
+    # 8 layers
+    Checkpoint.T5v1_1Small: None,
+    # 24 layers
+    Checkpoint.T5v1_1XL: None,
+    # 24 layers
+    Checkpoint.T5v1_1XXL: None,
+}
+
+dec_cross_ffn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
+    # 8 layers
+    Checkpoint.T5v1_1Small: None,
+    # 24 layers
+    Checkpoint.T5v1_1XL: None,
+    # 24 layers
     Checkpoint.T5v1_1XXL: None,
 }
 
@@ -185,7 +212,6 @@ def main():
         case _:
             raise ValueError(f'unknown checkpoint: {ckpt}')
 
-    do_legacy_scaling = False
     fuse_norms = True
 
     do_autocast = False
@@ -200,16 +226,16 @@ def main():
         f32_t5, f32_config = get_model(f32_dir, dtype=dtype)
     if f16_enabled := True:
         dtype: Optional[torch.dtype] = torch.float16 if f16_needs_cast else None
-        scaling_kwargs = {} if do_legacy_scaling else {
-            'fuse_norm_scales': fuse_norms,
-            'norm_fusion_via_f32': True,
-            'enc_attn_out_scales': attn_out_scale_dict[ckpt],
-            'enc_ffn_out_scales': ffn_out_scale_dict[ckpt],
-        }
         f16_t5, f16_config = get_model(
             f16_dir,
             dtype=dtype,
-            **scaling_kwargs,
+            fuse_norm_scales=fuse_norms,
+            norm_fusion_via_f32=True,
+            enc_attn_out_scales=enc_attn_out_scale_dict[ckpt],
+            enc_ffn_out_scales=enc_ffn_out_scale_dict[ckpt],
+            dec_self_attn_out_scales=dec_self_attn_out_scale_dict[ckpt],
+            dec_cross_attn_out_scales=dec_cross_attn_out_scale_dict[ckpt],
+            dec_ffn_out_scales=dec_cross_ffn_out_scale_dict[ckpt],
         )
         if f16_acc_gpupoor := False:
             from gpu_poor.modules import LowPrecisionLinear

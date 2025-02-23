@@ -142,7 +142,7 @@ enc_ffn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
     # 24 layers
     Checkpoint.T5v1_1XL: [*[1]*5, 1/4, *[1]*18],
     # 24 layers
-    Checkpoint.T5v1_1XXL: [*[1]*7, 1/4, *[1]*16],
+    Checkpoint.T5v1_1XXL: [*[1]*10, 1/4, *[1]*13],
 }
 
 enc_attn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {

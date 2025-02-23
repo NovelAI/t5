@@ -293,16 +293,13 @@ def main():
         f32_enc, f32_config = get_model(f32_dir, dtype=dtype)
     if f16_enabled := True:
         dtype: Optional[torch.dtype] = torch.float16 if f16_needs_cast else None
-        scaling_kwargs = {
-            'fuse_norm_scales': fuse_norms,
-            'norm_fusion_via_f32': True,
-            'enc_attn_out_scales': attn_out_scale_dict[ckpt],
-            'enc_ffn_out_scales': ffn_out_scale_dict[ckpt],
-        }
         f16_enc, f16_config = get_model(
             f16_dir,
             dtype=dtype,
-            **scaling_kwargs,
+            fuse_norm_scales=fuse_norms,
+            norm_fusion_via_f32=True,
+            enc_attn_out_scales=attn_out_scale_dict[ckpt],
+            enc_ffn_out_scales=ffn_out_scale_dict[ckpt],
         )
         if f16_acc_gpupoor := False:
             from gpu_poor.modules import LowPrecisionLinear

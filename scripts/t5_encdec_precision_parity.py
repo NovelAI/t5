@@ -389,7 +389,7 @@ def main():
                     input_mask=decoder_input_mask,
                     cross_mask=decoder_cross_mask,
                 )
-                f32_logits: FloatTensor = f32_t5.decoder.lm_head(f32_dec_out)
+                f32_logits: FloatTensor = f32_t5.lm_head(f32_dec_out)
         if bf16_enabled:
             bf16_enc_out: FloatTensor = bf16_t5.encoder(
                 input_ids=input_ids,
@@ -402,7 +402,7 @@ def main():
                 input_mask=decoder_input_mask,
                 cross_mask=decoder_cross_mask,
             )
-            bf16_logits: FloatTensor = bf16_t5.decoder.lm_head(bf16_dec_out)
+            bf16_logits: FloatTensor = bf16_t5.lm_head(bf16_dec_out)
         if f16_enabled:
             f16_enc_out: FloatTensor = f16_t5.encoder(
                 input_ids=input_ids,
@@ -416,7 +416,7 @@ def main():
                 input_mask=decoder_input_mask,
                 cross_mask=decoder_cross_mask,
             )
-            f16_logits: FloatTensor = f16_t5.decoder.lm_head(f16_dec_out)
+            f16_logits: FloatTensor = f16_t5.lm_head(f16_dec_out)
     
     if f32_enabled:
         if bf16_enabled or f16_enabled:

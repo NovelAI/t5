@@ -9,10 +9,11 @@ setup(
     author='NovelAI/Anlatan Inc.',
     url='https://github.com/NovelAI/t5',
     license='Apache-2.0',
-    packages=[
+    packages=['nai_t5'],
+    requires=[
         'torch',
-        'pydantic',
         'einops',
+        'pydantic',
     ],
     scripts=[
         'scripts/benchmark_attn.py',

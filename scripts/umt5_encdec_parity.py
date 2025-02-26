@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 from typing import OrderedDict
 
 import torch

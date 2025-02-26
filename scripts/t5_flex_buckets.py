@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 from torch import LongTensor, FloatTensor, inference_mode
 import torch
 from torch.nn import Embedding

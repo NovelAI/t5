@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 from typing import Optional, Callable, NamedTuple, TYPE_CHECKING, Any
 from functools import partial
 from argparse import ArgumentParser, BooleanOptionalAction

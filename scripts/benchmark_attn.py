@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 from torch import no_grad
 import torch
 from torch.utils.flop_counter import FlopCounterMode

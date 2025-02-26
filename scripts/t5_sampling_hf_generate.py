@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 from dataclasses import dataclass, field
 from typing import List, Set
 

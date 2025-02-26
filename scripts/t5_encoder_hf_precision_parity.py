@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 from typing import Any, Callable, NamedTuple, TypeVar
 import json
 from pathlib import Path

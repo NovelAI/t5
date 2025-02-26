@@ -15,6 +15,16 @@ setup(
         'einops',
         'pydantic',
     ],
+    extras_require={
+        # for using HF's tokenizer or converting HF checkpoints
+        "hf": ["transformers", "tokenizers"],
+
+        # preferred tokenizer
+        "sp": ["sentencepiece"],
+
+        # run benchmark scripts
+        "bench": ["tabulate", "triton"],
+    },
     scripts=[
         'scripts/benchmark_attn.py',
         'scripts/benchmark_encoder.py',
@@ -35,5 +45,5 @@ setup(
         'scripts/tokenizer_hf_to_sentencepiece.py',
         'scripts/umt5_encdec_parity.py',
         'scripts/umt5_encoder_parity.py',
-    ]
+    ],
 )

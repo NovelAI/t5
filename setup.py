@@ -10,7 +10,7 @@ setup(
     url='https://github.com/NovelAI/t5',
     license='Apache-2.0',
     packages=['nai_t5'],
-    requires=[
+    install_requires=[
         'torch',
         'einops',
         'pydantic',

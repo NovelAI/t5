@@ -17,8 +17,8 @@ from transformers.models.t5 import T5ForConditionalGeneration, T5TokenizerFast, 
 from transformers.models.t5.configuration_t5 import T5Config as T5ConfigHF
 
 from nai_t5 import T5, T5EncoderStack, T5Config, hf_to_based_t5_state, hf_to_based_t5_enc_state, to_based_config
+from nai_t5.sp_add_mask_vocab import add_mask_vocab
 
-from .tokenizer_hf_to_sentencepiece import add_mask_vocab
 
 class DType(str, Enum):
     Float16 = 'float16'

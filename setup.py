@@ -4,7 +4,7 @@ from distutils.core import setup
 
 setup(
     name='nai-t5',
-    version='1.0.1',
+    version='1.0.2',
     description='NovelAI T5',
     author='NovelAI/Anlatan Inc.',
     url='https://github.com/NovelAI/t5',

@@ -177,9 +177,11 @@ def main():
     hf_tok_assets_dir = hf_spiece_model.parent
     hf_tok_config_file = hf_tok_assets_dir / 'tokenizer_config.json'
 
+    cmd = f"python -m scripts.tokenizer_hf_to_sentencepiece" if __package__ else "tokenizer_hf_to_sentencepiece.py"
+
     print(f"""To convert HF's spiece.model into one which includes all the mask tokens, use:
 
-python -m scripts.tokenizer_hf_to_sentencepiece \\
+{cmd} \\
 --tokenizer-in     {hf_tokenizer.vocab_file} \\
 --tokenizer-config {hf_tok_config_file} \\
 --tokenizer-out    {args.out_dir / 'spiece.model'}

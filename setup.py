@@ -22,6 +22,14 @@ setup(
         # preferred tokenizer
         "sp": ["sentencepiece"],
 
+        # preferred way to load weights.
+        # allows you to stream weights from over the network (e.g. from an S3 bucket).
+        # 
+        # we also provide a weight-loader that can do checkpoint conversion at load-time,
+        # such as fusing norm scales, or scaling out-projections.
+        # mostly relevant when searching for float16 residual scales.
+        "tensorizer": ["tensorizer"],
+
         # run benchmark scripts
         "bench": ["tabulate", "triton"],
     },

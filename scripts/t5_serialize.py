@@ -2,6 +2,7 @@
 
 import argparse
 from pathlib import Path
+from shutil import copyfile
 from typing import OrderedDict, Optional
 
 from enum import Enum
@@ -16,6 +17,8 @@ from transformers.models.t5 import T5ForConditionalGeneration, T5TokenizerFast, 
 from transformers.models.t5.configuration_t5 import T5Config as T5ConfigHF
 
 from nai_t5 import T5, T5EncoderStack, T5Config, hf_to_based_t5_state, hf_to_based_t5_enc_state, to_based_config
+
+from .tokenizer_hf_to_sentencepiece import add_mask_vocab
 
 class DType(str, Enum):
     Float16 = 'float16'
@@ -176,18 +179,32 @@ def main():
     hf_spiece_model = Path(hf_tokenizer.vocab_file)
     hf_tok_assets_dir = hf_spiece_model.parent
     hf_tok_config_file = hf_tok_assets_dir / 'tokenizer_config.json'
+    tok_model_out = args.out_dir / 'spiece.model'
 
-    cmd = f"python -m scripts.tokenizer_hf_to_sentencepiece" if __package__ else "tokenizer_hf_to_sentencepiece.py"
+    print(f"Converting sentencepiece model...")
+    try:
+        add_mask_vocab(
+            tokenizer_in=hf_spiece_model,
+            tokenizer_config=hf_tok_config_file,
+            tokenizer_out=tok_model_out,
+        )
+    except Exception as e:
+        cmd = f"python -m scripts.tokenizer_hf_to_sentencepiece" if __package__ else "tokenizer_hf_to_sentencepiece.py"
 
-    print(f"""To convert HF's spiece.model into one which includes all the mask tokens, use:
+        print(f"""To convert HF's spiece.model into one which includes all the mask tokens, use:
 
-{cmd} \\
---tokenizer-in     {hf_tokenizer.vocab_file} \\
---tokenizer-config {hf_tok_config_file} \\
---tokenizer-out    {args.out_dir / 'spiece.model'}
+    {cmd} \\
+    --tokenizer-in     {hf_tokenizer.vocab_file} \\
+    --tokenizer-config {hf_tok_config_file} \\
+    --tokenizer-out    {tok_model_out}
 
-(We would've done that for you, but needs to be in a separate runtime to avoid a clash of sentencepiece filename in descriptor pool)
-""")
+    (We would've done that for you, but needs to be in a separate runtime to avoid a clash of sentencepiece filename in descriptor pool)
+    """)
+
+        # we can at least copy the original spiece.model, which lacks mask tokens.
+        copyfile(hf_spiece_model, tok_model_out)
+
+        raise e
 
 if __name__ == "__main__":
     main()

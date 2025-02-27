@@ -307,6 +307,63 @@ _You don't need to pass the regular boolean mask in any more; flex doesn't look 
     )
 ```
 
+### Norm scale fusion
+
+Before constructing the model, modify the config to set `elementwise_affine=False`. This will construct RMSNorm without scale weights.  
+_You can also enable flex attention here in the config if you want, as above._
+
+```diff
+  config: T5Config = T5Config.model_validate(conf_dict)
++ config = config.model_copy(update={
++     'elementwise_affine': False,
++ })
+```
+
+When loading weights onto the model, specify `fuse_norm_scales=True`.
+
+```diff
+- from tensorizer import TensorDeserializer
++ from nai_t5.weight_load import FusingDeserializer
+
+- deserializer = TensorDeserializer(t5_dir / 'enc.tensors', lazy_load=True, dtype=dtype, device=device)
+- deserializer.load_into_module(t5_enc)
++ deserializer = FusingDeserializer(t5_dir / 'enc.tensors', lazy_load=True, dtype=dtype, device=device)
++ deserializer.load_with_fusions(
++     t5_enc,
++     fuse_norm_scales=True,
++     norm_fusion_via_f32=True,
++ )
+  deserializer.close()
+```
+
+RMSNorm scales will be fused into the weights of whatever Linear projection occurs after them, reducing latency and exposing you to fewer instances of floating-point rounding.
+
+### Float16 usage (encoder)
+
+_You can also fuse norm scales with the FusingDeserializer here, as above._
+
+```diff
+- from tensorizer import TensorDeserializer
++ from nai_t5.weight_load import FusingDeserializer
+
+- deserializer = TensorDeserializer(t5_dir / 'enc.tensors', lazy_load=True, dtype=dtype, device=device)
+- deserializer.load_into_module(t5_enc)
++ deserializer = FusingDeserializer(t5_dir / 'enc.tensors', lazy_load=True, dtype=dtype, device=device)
++ deserializer.load_with_fusions(
++     t5_enc,
++     enc_attn_out_scales=None,
++     # FFN out weight scales for the 8 layers of google/t5-v1_1-small's encoder
++     enc_ffn_out_scales=[*[1]*6, 1/2, 1/2],
++ )
+  deserializer.close()
+```
+
+If you still encounter NaN outputs despite this: try using [`scripts/t5_encoder_precision_parity.py`](scripts/t5_encoder_precision_parity.py) to encode your prompt, and take note of the layer at which non-finite values are reported. Reduce scales at that layer and try again.
+
+The same script includes suggested scales for T5v1.1 small, XL, and XXL.  
+
+[`scripts/t5_encdec_precision_parity.py`](scripts/t5_encdec_precision_parity.py) likewise includes suggested _decoder_ scales for T5v1.1 small, XL, and XXL.
+
 ### Compilation
 
 After weights are loaded, you can reassign the encoder with a compiled instance.

@@ -177,7 +177,7 @@ pip install transformers tokenizers
 pip install huggingface_hub[hf_transfer]
 ```
 
-Installing `nai-t5` (see [Install](#install)) should put the `t5_serialize.py` script should on your shell's `PATH`.
+Installing `nai-t5` (see [Install](#install)) should put the [`t5_serialize.py`](scripts/t5_serialize.py) script should on your shell's `PATH`.
 
 You can export the t5 v1.1 small encoder like so:
 
@@ -194,9 +194,15 @@ ckpt/goog-t5-v1.1-small-bf16/config.json
 ckpt/goog-t5-v1.1-small-bf16/spiece.model # Sentencepiece model for T5 tokenization
 ```
 
+[`t5_serialize.py`](scripts/t5_serialize.py) supports also an `--encdec` option to export encoder-decoder weights, 
+and a `--dtensor` option to export the checkpoint as a distributed checkpoint (which can be loaded in pytorch without further dependencies).
+
 Google's T5 checkpoints were originally distributed in bfloat16.  
 Huggingface distributes them in float32, perhaps for compatibility reasons, but there is no extra precision in these larger checkpoints.  
-The range of values in the weights is not excessive, so should cast to float16 without much damage.
+The range of values in the weights is not excessive, so should cast to float16 comfortably.
+
+**FSDP**:  
+[`t5_serialize_dtensor.py`](scripts/t5_serialize_dtensor.py) supports loading a tensorizer checkpoint and converting it into a _sharded_ distributed tensor checkpoint. This enables multi-device deployments to load just their own shard of the weights, for FSDP-sharded inference.
 
 ## Usage
 
@@ -382,6 +388,12 @@ t5_enc = torch.compile(t5_enc, dynamic=False, fullgraph=True)
 
 This should make the model far faster.  
 Ensure that you use a fixed input size (i.e. pad to a fixed context length to keep shapes consistent), otherwise you will incur recompiles.
+
+### FSDP
+
+[`scripts/t5_encoder_parity_fsdp.py`](scripts/scripts/t5_encoder_parity_fsdp.py) demonstrates how to load the model in FSDP or FSDP2 from a distributed checkpoint.
+
+[`t5_serialize_dtensor.py`](scripts/t5_serialize_dtensor.py) can be used to convert a tensorizer checkpoint into a sharded distributed tensor checkpoint.
 
 ## Run
 

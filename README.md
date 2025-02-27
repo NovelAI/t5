@@ -194,6 +194,10 @@ ckpt/goog-t5-v1.1-small-bf16/config.json
 ckpt/goog-t5-v1.1-small-bf16/spiece.model # Sentencepiece model for T5 tokenization
 ```
 
+Google's T5 checkpoints were originally distributed in bfloat16.  
+Huggingface distributes them in float32, perhaps for compatibility reasons, but there is no extra precision in these larger checkpoints.  
+The range of values in the weights is not excessive, so should cast to float16 without much damage.
+
 ## Usage
 
 ### Basic usage (encoder)
@@ -341,6 +345,8 @@ RMSNorm scales will be fused into the weights of whatever Linear projection occu
 
 ### Float16 usage (encoder)
 
+Nominally, float16 inference should accumulate less floating-point error than bfloat16, due to its extra precision. So long as we scale down the weights and the size of the residual to stay within float16 range, and do not scale it so far as to lose accuracy to underflow.
+
 _You can also fuse norm scales with the FusingDeserializer here, as above._
 
 ```diff
@@ -362,6 +368,7 @@ _You can also fuse norm scales with the FusingDeserializer here, as above._
 If you still encounter NaN outputs despite this: try using [`scripts/t5_encoder_precision_parity.py`](scripts/t5_encoder_precision_parity.py) to encode your prompt, and take note of the layer at which non-finite values are reported. Reduce scales at that layer and try again.
 
 The same script includes suggested scales for T5v1.1 small, XL, and XXL.  
+These scales are chosen to be the smallest power-of-2 changes that allow the test sequence to be encoded, with the priority being to preserve float16 accuracy by not shrinking more than necessary. Consequently no headroom has been reserved, so it is possible that other prompts could exceed float16 range. The hope is that exposing control of this enables exploration.
 
 [`scripts/t5_encdec_precision_parity.py`](scripts/t5_encdec_precision_parity.py) likewise includes suggested _decoder_ scales for T5v1.1 small, XL, and XXL.
 

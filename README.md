@@ -4,6 +4,21 @@ Model code for T5. Designed to be fast and have good float16 support.
 Somewhat tidy.  
 Somewhat tested.
 
+## Install
+
+Install the `nai-t5` package.  
+Currently distributed via GitHub only; we install via the repository URL.
+
+```bash
+pip install git+https://github.com/NovelAI/t5.git
+# Sentencepiece tokenizer recommended, but you can use HF tokenizers too
+pip install sentencepiece
+# tensorizer recommended for weight-loading
+pip install tensorizer async_timeout
+```
+
+See [Get weights](#get-weights) and [Basic usage (encoder)](#basic-usage-encoder) next.
+
 ## What's included
 
 ### Performance features
@@ -152,22 +167,7 @@ We considered fusing the decoder's every cross-attention KV projection, but it's
 
 MaskedTensor could be used to exploit sparsity on padded fixed-length sequences. Fixed-length sequences help to enable torch.compile dynamic=False. This would be particularly beneficial when inferencing the decoder, as the sequence length keeps changing (but could be modelled as a fixed-length MaskedTensor).
 
-## Setup
-
-### Install
-
-Install the `nai-t5` package.  
-Currently distributed via GitHub only; we install via the repository URL.
-
-```bash
-pip install git+https://github.com/NovelAI/t5.git
-# Sentencepiece tokenizer recommended, but you can use HF tokenizers too
-pip install sentencepiece
-# tensorizer recommended for weight-loading
-pip install tensorizer async_timeout
-```
-
-### Get weights
+## Get weights
 
 We'll use HF transformers to download model weights, HF tokenizers to download the sentencepiece model:
 
@@ -194,6 +194,7 @@ ckpt/goog-t5-v1.1-small-bf16/config.json
 ckpt/goog-t5-v1.1-small-bf16/spiece.model # Sentencepiece model for T5 tokenization
 ```
 
+## Usage
 
 ### Basic usage (encoder)
 
@@ -377,6 +378,8 @@ Ensure that you use a fixed input size (i.e. pad to a fixed context length to ke
 
 ## Run
 
+TODO: delete this section after documenting the scripts
+
 ```bash
 python -m scripts.t5_encoder_parity
 python -m scripts.t5_encdec_parity
@@ -386,6 +389,8 @@ python -m scripts.t5_sampling_parity_cache
 ```
 
 ## Example scripts
+
+TODO: delete this section after documenting the scripts
 
 - sampling code example
 - FLOP counter demo (will work for SDPA but not Flex attention)

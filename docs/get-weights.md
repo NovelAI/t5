@@ -8,7 +8,7 @@ pip install transformers tokenizers
 pip install huggingface_hub[hf_transfer]
 ```
 
-Installing `nai-t5` (see [Install](#install)) should put the [`t5_serialize.py`](scripts/t5_serialize.py) script should on your shell's `PATH`.
+We assume you have already installed the `nai-t5` pip package, which should put the [`t5_serialize.py`](scripts/t5_serialize.py) script should on your shell's `PATH`.
 
 You can export the t5 v1.1 small encoder like so:
 

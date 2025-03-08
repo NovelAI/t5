@@ -10,8 +10,13 @@ Install the `nai-t5` package.
 Currently distributed via GitHub only; we install via the repository URL.
 
 ```bash
+# installs nai-t5
 pip install git+https://github.com/NovelAI/t5.git
+```
 
+Other packages you'll probably want:
+
+```bash
 # Sentencepiece tokenizer recommended, but you can use HF tokenizers too
 pip install sentencepiece
 # tensorizer recommended for weight-loading

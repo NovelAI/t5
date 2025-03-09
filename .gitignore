@@ -3,3 +3,4 @@ __pycache__/
 /src/
 /t5-ckpt/
 /t5-small/
+/ckpt/

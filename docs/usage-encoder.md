@@ -2,59 +2,17 @@
 
 ### Basic usage (encoder)
 
-Encode a batch of prompts like this:
+We will encode a prompt:
 
-```python
-import json
-from typing import Any, Optional
-from pathlib import Path
-import torch
-from torch import BoolTensor, FloatTensor, IntTensor, inference_mode
-from tensorizer import TensorDeserializer
-from sentencepiece import SentencePieceProcessor
+> `illustration of a nice tree`
 
-from nai_t5 import T5Config, T5EncoderStack
+The embedding that's returned can be a good condition for a text-to-image model such as Imagen or Flux.
 
-t5_dir = Path('ckpt/goog-t5-v1.1-small-bf16')
-
-with open(t5_dir / 'config.json', 'r') as f:
-    conf_dict: dict[str, Any] = json.load(f)
-config: T5Config = T5Config.model_validate(conf_dict)
-
-with torch.device('meta'):
-    t5_enc: T5EncoderStack = T5EncoderStack(config).eval()
-
-dtype = torch.bfloat16
-device = torch.device('cuda')
-deserializer = TensorDeserializer(t5_dir / 'enc.tensors', lazy_load=True, dtype=dtype, device=device)
-deserializer.load_into_module(t5_enc)
-deserializer.close()
-
-tokenizer = SentencePieceProcessor(model_file=str(t5_dir / 'spiece.model'))
-
-prompts: list[str] = ['hello world']
-batch_size = len(prompts)
-
-toks: list[list[int]] = tokenizer.Encode(prompts, add_eos=True)
-
-fixed_ctx_len: Optional[int] = 512
-
-ctx_len: int = max(len(t) for t in toks) if fixed_ctx_len is None else fixed_ctx_len
-
-input_ids: IntTensor = torch.full((batch_size, ctx_len), fill_value=tokenizer.pad_id(), dtype=torch.int32, device='cpu')
-for seq, input_out in zip(toks, input_ids.unbind()):
-    input_out[:len(seq)].copy_(torch.tensor(seq[:ctx_len], dtype=torch.int32))
-input_ids = input_ids.to(device)
-mask: BoolTensor = input_ids != tokenizer.pad_id()
-
-with inference_mode():
-    emb: FloatTensor = t5_enc(
-        input_ids=input_ids,
-        input_mask=mask,
-    )
-```
+See [`t5_encoder_basic.py`](../examples/t5_encoder_basic.py).
 
 ### Flex attention
+
+_This optimization is included in [`t5_encoder_fast.py`](../examples/t5_encoder_fast.py)._
 
 **Why**  
 Flex attention makes T5 a lot faster. T5 relies on an arbitrary attention bias to implement relative position.
@@ -114,6 +72,8 @@ _You don't need to pass the regular boolean mask in any more; flex doesn't look 
 
 ### Norm scale fusion (after weight-load)
 
+_This optimization is included in [`t5_encoder_fast.py`](../examples/t5_encoder_fast.py)._
+
 We can fuse RMSNorm scales into the weights of whatever Linear projection occurs after them, reducing latency and exposing you to fewer instances of floating-point rounding.
 
 ```diff
@@ -136,6 +96,8 @@ Alternatively you could save your fused model weights afterward so you don't nee
 If you do that, you should save out a modified config with `elementwise_affine=False`, and use that config afterward.
 
 ### Norm scale fusion (during weight-load)
+
+_This optimization is included in [`t5_encoder_fast_float16.py`](../examples/t5_encoder_fast_float16.py)._
 
 Another supported way to fuse norm scales is to do so at the moment when weights are being loaded into the model. This is only really relevant if you're using the FusingDeserializer as your weight-loader already for other reasons (i.e. float16 weight load & scaling).
 
@@ -174,6 +136,8 @@ You could save the fused model and updated config and load those instead next ti
 
 ### Float16 usage (encoder)
 
+_See [`t5_encoder_fast_float16.py`](../examples/t5_encoder_fast_float16.py)._
+
 Nominally, float16 inference should accumulate less floating-point error than bfloat16, due to its extra precision. So long as we scale down the weights and the size of the residual to stay within float16 range, and do not scale it so far as to lose accuracy to underflow.
 
 _You can also fuse norm scales with the FusingDeserializer here, as above._
@@ -202,6 +166,8 @@ These scales are chosen to be the smallest power-of-2 changes that allow the tes
 [`scripts/t5_encdec_precision_parity.py`](scripts/t5_encdec_precision_parity.py) likewise includes suggested _decoder_ scales for T5v1.1 small, XL, and XXL.
 
 ### Compilation
+
+_This optimization is included in [`t5_encoder_fast.py`](../examples/t5_encoder_fast.py)._
 
 After weights are loaded, you can reassign the encoder with a compiled instance.
 

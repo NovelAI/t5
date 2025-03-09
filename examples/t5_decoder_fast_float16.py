@@ -23,6 +23,9 @@ from nai_t5.checkpoint_info import (
     dec_ffn_out_scale_dict,
 )
 
+# if you have exported a float16 checkpoint already you could load those weights instead,
+# to save some time casting. otherwise we'll load the bf16 weights and cast them during load.
+# t5_dir = Path('ckpt/goog-t5-v1.1-small-fp16')
 t5_dir = Path('ckpt/goog-t5-v1.1-small-bf16')
 ckpt=Checkpoint.T5v1_1Small
 
@@ -45,9 +48,6 @@ with torch.device('meta'):
 t5_dec: T5DecoderStack = t5.decoder
 t5_enc: T5EncoderStack = t5.encoder
 
-# NOTE: compilation is only beneficial if you intend to run the encoder multiple times.
-t5_enc = torch.compile(t5_enc, dynamic=False, fullgraph=True)
-
 dtype = torch.float16
 device = torch.device('cuda')
 deserializer = FusingDeserializer(t5_dir / 'encdec.tensors', lazy_load=True, dtype=dtype, device=device)
@@ -65,6 +65,9 @@ deserializer.close()
 
 # for flex attention to apply relative position bias
 t5_enc.bind_score_mods(seq_len=512)
+
+# NOTE: compilation is only beneficial if you intend to run the encoder multiple times.
+t5_enc = torch.compile(t5_enc, dynamic=False, fullgraph=True)
 
 tokenizer = SentencePieceProcessor(model_file=str(t5_dir / 'spiece.model'))
 

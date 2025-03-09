@@ -173,6 +173,30 @@
             }
         },
         {
+            "name": "t5_encoder_basic",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "examples.t5_encoder_basic",
+            "justMyCode": true,
+            "subProcess": false,
+        },
+        {
+            "name": "t5_encoder_fast",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "examples.t5_encoder_fast",
+            "justMyCode": true,
+            "subProcess": false,
+        },
+        {
+            "name": "t5_encoder_fast_float16",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "examples.t5_encoder_fast_float16",
+            "justMyCode": true,
+            "subProcess": false,
+        },
+        {
             "name": "t5_decoder_basic",
             "type": "debugpy",
             "request": "launch",

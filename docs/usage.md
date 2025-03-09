@@ -112,7 +112,32 @@ _You don't need to pass the regular boolean mask in any more; flex doesn't look 
     )
 ```
 
-### Norm scale fusion
+### Norm scale fusion (after weight-load)
+
+We can fuse RMSNorm scales into the weights of whatever Linear projection occurs after them, reducing latency and exposing you to fewer instances of floating-point rounding.
+
+```diff
++ from nai_t5.fuse_norm_scales import fuse_norm_scales_enc
+
+  deserializer = TensorDeserializer(t5_dir / 'enc.tensors', lazy_load=True, dtype=dtype, device=device)
+  deserializer.load_into_module(t5_enc)
+  deserializer.close()
+
++ fuse_norm_scales_enc(t5_enc)
+```
+
+If you want slightly more accurate fused weights and don't mind waiting slightly longer, you can pass `norm_fusion_via_f32=True`, but it probably doesn't make a big difference. Haven't checked.
+
+**Do I have to fuse norm scales on every startup?**
+
+It's pretty fast, so you could.
+
+Alternatively you could save your fused model weights afterward so you don't need to fuse them next time.  
+If you do that, you should save out a modified config with `elementwise_affine=False`, and use that config afterward.
+
+### Norm scale fusion (during weight-load)
+
+Another supported way to fuse norm scales is to do so at the moment when weights are being loaded into the model. This is only really relevant if you're using the FusingDeserializer as your weight-loader already for other reasons (i.e. float16 weight load & scaling).
 
 Before constructing the model, modify the config to set `elementwise_affine=False`. This will construct RMSNorm without scale weights.  
 _You can also enable flex attention here in the config if you want, as above._
@@ -142,6 +167,10 @@ When loading weights onto the model, specify `fuse_norm_scales=True`.
 ```
 
 RMSNorm scales will be fused into the weights of whatever Linear projection occurs after them, reducing latency and exposing you to fewer instances of floating-point rounding.
+
+**Do I have to fuse norm scales on every startup?**
+
+You could save the fused model and updated config and load those instead next time.
 
 ### Float16 usage (encoder)
 

@@ -22,6 +22,8 @@ from nai_t5.t5_common import RMSNormCast
 from nai_t5.weight_load import FusingDeserializer
 from nai_t5.replace_linear import replace_linear
 from nai_t5.t5_hf import replace_gates, replace_norms
+from nai_t5.checkpoint_names import Checkpoint
+from nai_t5.f16_scales import enc_attn_out_scale_dict, enc_ffn_out_scale_dict
 
 from torch import Tensor
 from typing import Optional
@@ -129,21 +131,6 @@ T = TypeVar('T')
 class VoidList(list[T]):
     def append(self, _: T) -> None:
         pass
-
-ffn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
-    # 8 layers
-    Checkpoint.T5v1_1Small: [*[1]*6, 1/2, 1/2],
-    # 24 layers
-    Checkpoint.T5v1_1XL: [*[1]*5, 1/8, *[1]*18],
-    # 24 layers
-    Checkpoint.T5v1_1XXL: [*[1]*7, 1/4, *[1]*16],
-}
-
-attn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
-    Checkpoint.T5v1_1Small: None,
-    Checkpoint.T5v1_1XL: None,
-    Checkpoint.T5v1_1XXL: None,
-}
 
 ckpt_to_hf_model_name: dict[Checkpoint, str] = {
     Checkpoint.T5v1_1Small: 'google/t5-v1_1-small',
@@ -300,8 +287,8 @@ def main():
             dtype=dtype,
             fuse_norm_scales=fuse_norms,
             norm_fusion_via_f32=True,
-            enc_attn_out_scales=attn_out_scale_dict[ckpt],
-            enc_ffn_out_scales=ffn_out_scale_dict[ckpt],
+            enc_attn_out_scales=enc_attn_out_scale_dict[ckpt],
+            enc_ffn_out_scales=enc_ffn_out_scale_dict[ckpt],
         )
         if f16_acc_gpupoor := False:
             from gpu_poor.modules import LowPrecisionLinear

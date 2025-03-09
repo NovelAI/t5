@@ -18,6 +18,14 @@ from nai_t5 import T5Config, T5
 from nai_t5.t5_common import RMSNormCast
 from nai_t5.weight_load import FusingDeserializer
 from nai_t5.replace_linear import replace_linear
+from nai_t5.checkpoint_names import Checkpoint
+from nai_t5.f16_scales import (
+    enc_ffn_out_scale_dict,
+    enc_attn_out_scale_dict,
+    dec_self_attn_out_scale_dict,
+    dec_cross_attn_out_scale_dict,
+    dec_ffn_out_scale_dict,
+)
 
 from torch import Tensor
 from typing import Optional
@@ -50,13 +58,6 @@ class PrecisionMode(str, Enum):
     MixedBF16 = 'mixed-bf16'
     PureBF16 = 'pure-bf16'
     PureF16 = 'pure-f16'
-
-class Checkpoint(str, Enum):
-    T5v1_1Small = 't5-v1.1-small'
-    T5v1_1XL = 't5-v1.1-xl'
-    T5v1_1XXL = 't5-v1.1-xxl'
-    T5v1Large = 't5-v1-large'
-    PileT5Large = 'pile-t5-large'
 
 
 class EncDecAndConfig(NamedTuple):
@@ -137,48 +138,6 @@ T = TypeVar('T')
 class VoidList(list[T]):
     def append(self, _: T) -> None:
         pass
-
-enc_ffn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
-    # 8 layers
-    Checkpoint.T5v1_1Small: [*[1]*6, 1/2, 1/2],
-    # 24 layers
-    Checkpoint.T5v1_1XL: [*[1]*5, 1/8, *[1]*18],
-    # 24 layers
-    Checkpoint.T5v1_1XXL: [*[1]*7, 1/4, *[1]*16],
-}
-
-enc_attn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
-    Checkpoint.T5v1_1Small: None,
-    Checkpoint.T5v1_1XL: None,
-    Checkpoint.T5v1_1XXL: None,
-}
-
-dec_self_attn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
-    # 8 layers
-    Checkpoint.T5v1_1Small: None,
-    # 24 layers
-    Checkpoint.T5v1_1XL: None,
-    # 24 layers
-    Checkpoint.T5v1_1XXL: None,
-}
-
-dec_cross_attn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
-    # 8 layers
-    Checkpoint.T5v1_1Small: None,
-    # 24 layers
-    Checkpoint.T5v1_1XL: None,
-    # 24 layers
-    Checkpoint.T5v1_1XXL: None,
-}
-
-dec_ffn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
-    # 8 layers
-    Checkpoint.T5v1_1Small: [*[1]*2, 1/2, *[1]*5],
-    # 24 layers
-    Checkpoint.T5v1_1XL: None,
-    # 24 layers
-    Checkpoint.T5v1_1XXL: None,
-}
 
 def main():
     device = torch.device("cuda")

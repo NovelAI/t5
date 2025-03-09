@@ -19,6 +19,8 @@ from nai_t5.t5_common import RMSNormCast
 from nai_t5.t5_encoder import T5EncoderLayer
 from nai_t5.weight_load import FusingDeserializer
 from nai_t5.replace_linear import replace_linear
+from nai_t5.checkpoint_names import Checkpoint
+from nai_t5.f16_scales import enc_attn_out_scale_dict, enc_ffn_out_scale_dict
 
 from torch import Tensor
 from typing import Optional
@@ -127,21 +129,6 @@ class VoidList(list[T]):
     def append(self, _: T) -> None:
         pass
 
-ffn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
-    # 8 layers
-    Checkpoint.T5v1_1Small: [*[1]*6, 1/2, 1/2],
-    # 24 layers
-    Checkpoint.T5v1_1XL: [*[1]*5, 1/8, *[1]*18],
-    # 24 layers
-    Checkpoint.T5v1_1XXL: [*[1]*7, 1/4, *[1]*16],
-}
-
-attn_out_scale_dict: dict[Checkpoint, Optional[list[float]]] = {
-    Checkpoint.T5v1_1Small: None,
-    Checkpoint.T5v1_1XL: None,
-    Checkpoint.T5v1_1XXL: None,
-}
-
 def main():
     device = torch.device("cuda")
 
@@ -197,8 +184,8 @@ def main():
         scaling_kwargs = {} if do_legacy_scaling else {
             'fuse_norm_scales': fuse_norms,
             'norm_fusion_via_f32': True,
-            'enc_attn_out_scales': attn_out_scale_dict[ckpt],
-            'enc_ffn_out_scales': ffn_out_scale_dict[ckpt],
+            'enc_attn_out_scales': enc_attn_out_scale_dict[ckpt],
+            'enc_ffn_out_scales': enc_ffn_out_scale_dict[ckpt],
         }
         f16_enc, f16_config = get_model(
             f16_dir,
@@ -384,14 +371,14 @@ def main():
         latter_ffn_in_smallers: list[float] = [1, 1]
         ffn_in_smallers: list[float] = [*[1]*(f16_config.num_layers-len(latter_ffn_in_smallers)), *latter_ffn_in_smallers]
 
-        if ckpt in ffn_out_scale_dict:
-            ffn_out_scales: list[float] = ffn_out_scale_dict[ckpt] or [1]*f16_config.num_layers
+        if ckpt in enc_ffn_out_scale_dict:
+            ffn_out_scales: list[float] = enc_ffn_out_scale_dict[ckpt] or [1]*f16_config.num_layers
         else:
             print(f'WARN: no f16 ffn_out scaling known for {ckpt}')
             ffn_out_scales = [1]*f16_config.num_layers
 
-        if ckpt in attn_out_scale_dict:
-            attn_out_scales: list[float] = attn_out_scale_dict[ckpt] or [1]*f16_config.num_layers
+        if ckpt in enc_attn_out_scale_dict:
+            attn_out_scales: list[float] = enc_attn_out_scale_dict[ckpt] or [1]*f16_config.num_layers
         else:
             print(f'WARN: no f16 ffn_out scaling known for {ckpt}')
             attn_out_scales = [1]*f16_config.num_layers

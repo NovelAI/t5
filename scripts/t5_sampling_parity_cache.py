@@ -164,7 +164,7 @@ def main():
         max_tokens=max_new_tokens,
         stop_tokens={mask2, hf_t5.config.eos_token_id},
         decoder_start_token_id=hf_t5.config.decoder_start_token_id,
-        pad_start_token_id=hf_t5.config.pad_token_id,
+        pad_token_id=hf_t5.config.pad_token_id,
     )
     my_acc: List[int] = []
     for ix, (tok_t, expected_tok) in enumerate(zip(gen, expected_output[0, 1:].tolist())):

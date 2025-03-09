@@ -51,15 +51,15 @@ def generate_until(
     raise_on_overflow=True,
     stop_tokens: Set[int] = set(),
     decoder_start_token_id=0,
-    pad_start_token_id=0,
+    pad_token_id=0,
 ) -> Generator[LongTensor, None, LongTensor]:
     buffer: LongTensor = torch.full(
         (batch_size, max_tokens + 1),
-        fill_value=pad_start_token_id,
+        fill_value=pad_token_id,
         dtype=torch.long,
         device=device,
     )
-    if decoder_start_token_id != pad_start_token_id:
+    if decoder_start_token_id != pad_token_id:
         buffer[:, 0] = decoder_start_token_id
 
     proceed = True

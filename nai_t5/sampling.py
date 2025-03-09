@@ -62,6 +62,7 @@ def generate_until(
     if decoder_start_token_id != pad_start_token_id:
         buffer[:, 0] = decoder_start_token_id
 
+    proceed = True
     out_ix = 1
     gen: Generator[FloatTensor, LongTensor, None] = make_gen(buffer[:, 0:1])
     logits: FloatTensor = next(gen)
@@ -71,10 +72,13 @@ def generate_until(
         prediction_cpu: LongTensor = prediction.cpu().squeeze()
         for stop_token in stop_tokens:
             if torch.any(prediction_cpu == stop_token):
+                proceed = False
                 break
         buffer[:, out_ix] = prediction
         out_ix += 1
         yield prediction
+        if not proceed:
+            break
         logits: FloatTensor = gen.send(buffer[:, :out_ix])
     else:
         if raise_on_overflow:

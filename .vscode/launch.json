@@ -172,5 +172,37 @@
                 "TORCHINDUCTOR_COMPILE_THREADS": "1",
             }
         },
+        {
+            "name": "t5_decoder_basic",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "examples.t5_decoder_basic",
+            "justMyCode": true,
+            "subProcess": false,
+        },
+        {
+            "name": "t5_decoder_basic_nocache",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "examples.t5_decoder_basic_nocache",
+            "justMyCode": true,
+            "subProcess": false,
+        },
+        {
+            "name": "t5_decoder_fast",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "examples.t5_decoder_fast",
+            "justMyCode": true,
+            "subProcess": false,
+        },
+        {
+            "name": "t5_decoder_fast_float16",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "examples.t5_decoder_fast_float16",
+            "justMyCode": true,
+            "subProcess": false,
+        },
     ]
 }

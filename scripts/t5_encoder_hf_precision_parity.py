@@ -22,7 +22,13 @@ from nai_t5.t5_common import RMSNormCast
 from nai_t5.weight_load import FusingDeserializer
 from nai_t5.replace_linear import replace_linear
 from nai_t5.t5_hf import replace_gates, replace_norms
-from nai_t5.checkpoint_info import Checkpoint, enc_attn_out_scale_dict, enc_ffn_out_scale_dict
+from nai_t5.checkpoint_info import (
+    Checkpoint,
+    enc_attn_out_scale_dict,
+    enc_ffn_out_scale_dict,
+    ckpt_to_hf_model_name,
+    ckpt_is_umt5,
+)
 
 from torch import Tensor
 from typing import Optional

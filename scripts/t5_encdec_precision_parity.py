@@ -18,8 +18,8 @@ from nai_t5 import T5Config, T5
 from nai_t5.t5_common import RMSNormCast
 from nai_t5.weight_load import FusingDeserializer
 from nai_t5.replace_linear import replace_linear
-from nai_t5.checkpoint_names import Checkpoint
-from nai_t5.f16_scales import (
+from nai_t5.checkpoint_info import (
+    Checkpoint,
     enc_ffn_out_scale_dict,
     enc_attn_out_scale_dict,
     dec_self_attn_out_scale_dict,

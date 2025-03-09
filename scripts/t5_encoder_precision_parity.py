@@ -19,8 +19,11 @@ from nai_t5.t5_common import RMSNormCast
 from nai_t5.t5_encoder import T5EncoderLayer
 from nai_t5.weight_load import FusingDeserializer
 from nai_t5.replace_linear import replace_linear
-from nai_t5.checkpoint_names import Checkpoint
-from nai_t5.f16_scales import enc_attn_out_scale_dict, enc_ffn_out_scale_dict
+from nai_t5.checkpoint_info import (
+    Checkpoint,
+    enc_attn_out_scale_dict,
+    enc_ffn_out_scale_dict,
+)
 
 from torch import Tensor
 from typing import Optional
@@ -53,13 +56,6 @@ class PrecisionMode(str, Enum):
     MixedBF16 = 'mixed-bf16'
     PureBF16 = 'pure-bf16'
     PureF16 = 'pure-f16'
-
-class Checkpoint(str, Enum):
-    T5v1_1Small = 't5-v1.1-small'
-    T5v1_1XL = 't5-v1.1-xl'
-    T5v1_1XXL = 't5-v1.1-xxl'
-    T5v1Large = 't5-v1-large'
-    PileT5Large = 'pile-t5-large'
 
 
 class EncAndConfig(NamedTuple):

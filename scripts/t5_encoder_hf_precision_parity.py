@@ -22,8 +22,7 @@ from nai_t5.t5_common import RMSNormCast
 from nai_t5.weight_load import FusingDeserializer
 from nai_t5.replace_linear import replace_linear
 from nai_t5.t5_hf import replace_gates, replace_norms
-from nai_t5.checkpoint_names import Checkpoint
-from nai_t5.f16_scales import enc_attn_out_scale_dict, enc_ffn_out_scale_dict
+from nai_t5.checkpoint_info import Checkpoint, enc_attn_out_scale_dict, enc_ffn_out_scale_dict
 
 from torch import Tensor
 from typing import Optional
@@ -56,13 +55,6 @@ class PrecisionMode(str, Enum):
     MixedBF16 = 'mixed-bf16'
     PureBF16 = 'pure-bf16'
     PureF16 = 'pure-f16'
-
-class Checkpoint(str, Enum):
-    T5v1_1Small = 't5-v1.1-small'
-    T5v1_1XL = 't5-v1.1-xl'
-    T5v1_1XXL = 't5-v1.1-xxl'
-    T5v1Large = 't5-v1-large'
-    PileT5Large = 'pile-t5-large'
 
 
 class EncAndConfig(NamedTuple):
@@ -131,22 +123,6 @@ T = TypeVar('T')
 class VoidList(list[T]):
     def append(self, _: T) -> None:
         pass
-
-ckpt_to_hf_model_name: dict[Checkpoint, str] = {
-    Checkpoint.T5v1_1Small: 'google/t5-v1_1-small',
-    Checkpoint.T5v1_1XL: 'google/t5-v1_1-xl',
-    Checkpoint.T5v1_1XXL: 'google/t5-v1_1-xxl',
-    Checkpoint.T5v1Large: 'google-t5/t5-large',
-    Checkpoint.PileT5Large: 'EleutherAI/pile-t5-large',
-}
-
-ckpt_is_umt5: dict[Checkpoint, str] = {
-    Checkpoint.T5v1_1Small: False,
-    Checkpoint.T5v1_1XL: False,
-    Checkpoint.T5v1_1XXL: False,
-    Checkpoint.T5v1Large: False,
-    Checkpoint.PileT5Large: True,
-}
 
 class PrecisionMode(str, Enum):
     Float32 = 'float32'

@@ -64,12 +64,13 @@ Typically you'll want to use the encoder, but the decoder can be useful for quer
 - support for v1.1 (GEGLU) and v1.0 (ReLU)
 - support for UMT5 (e.g. EleutherAI's pile-t5) per-layer position embeddings
 - supports SentencePiece tokenizer
+- supports disabling attention scale, for compatibility with Google checkpoints
+  - Google burned the attention scale into the weights, which had no detriment to training dynamics because Adafactor optimizer scales param lr w.r.t the RMS of the params ([more detail here](https://x.com/Birchlabs/status/1821188959201845745))
 
 ### Training considerations
 
 - weight init (basic attempt)
-- supports disabling attention scale, for compatibility with Google checkpoints
-  - Google burned the attention scale into the weights, which had no detriment to training dynamics because Adafactor optimizer scales param lr w.r.t the RMS of the params ([more detail here](https://x.com/Birchlabs/status/1821188959201845745))
+- supports conventional attention scale (`head_dim**-.5`)
 
 ### Float16 considerations
 

@@ -23,13 +23,16 @@ pip install sentencepiece
 pip install tensorizer async_timeout
 ```
 
+We recommend sentencepiece as tokenizer. See [tokenization](docs/tokenizers.md) docs for our reasoning.
+
 ## Get weights
 
-See [docs/get-weights.md](weight loading) docs.
+See [weight loading](docs/get-weights.md) docs for how to convert HF weights to a format we can load, and to update the tokenizer model with the special tokens it's missing.
 
 ## Usage
 
-See [docs/usage.md](usage) docs.
+See [encoder usage](docs/usage-encoder.md) or [decoder usage](docs/usage-decoder.md) docs.  
+Typically you'll want to use the encoder, but the decoder can be useful for querying T5 to determine concepts it understands.
 
 ## What's included
 
@@ -94,22 +97,3 @@ Main objective was to modernize T5 with Torch SDPA attention and write in a clea
 We considered fusing the decoder's every cross-attention KV projection, but it's questionable whether this would provide any speedup (KV is work that can be done concurrently with Q anyway), and it would complicate FSDP (the very wide fused KV projection would need to be chunked to achieve good compute/communication overlap).
 
 MaskedTensor could be used to exploit sparsity on padded fixed-length sequences. Fixed-length sequences help to enable torch.compile dynamic=False. This would be particularly beneficial when inferencing the decoder, as the sequence length keeps changing (but could be modelled as a fixed-length MaskedTensor).
-
-## Run
-
-TODO: delete this section after documenting the scripts
-
-```bash
-python -m scripts.t5_encoder_parity
-python -m scripts.t5_encdec_parity
-python -m scripts.t5_sampling_hf_generate
-python -m scripts.t5_sampling_parity_nocache
-python -m scripts.t5_sampling_parity_cache
-```
-
-## Example scripts
-
-TODO: delete this section after documenting the scripts
-
-- sampling code example
-- FLOP counter demo (will work for SDPA but not Flex attention)

@@ -4,7 +4,7 @@ import torch
 from torch.nn import Module, GELU
 from torch import Tensor, cat, inference_mode
 
-from .t5_common import T5Config, T5FFNType, GELUApprox, RMSNormCast
+from .t5_common import T5Config, T5FFNType, GELUApprox
 
 ####
 #### Construction of T5 config from HF config

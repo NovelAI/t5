@@ -402,7 +402,7 @@ def main():
 
     tokenizer = SentencePieceProcessor(model_file=str(f32_dir / 'spiece.model'))
     
-    prompts: list[str] = ['hello world']
+    prompts: list[str] = ['Today is a fine<extra_id_0> on which to walk my<extra_id_1> in the park.']
     batch_size = len(prompts)
 
     toks: list[list[int]] = tokenizer.Encode(prompts, add_eos=True)

@@ -185,6 +185,27 @@ class T5EncoderSelfAttentionFlex(nn.Module):
         ) -> BoolTensor:
             return mask[batch, kv_idx] & mask[batch, q_idx]
         return mask_mod
+    
+    @staticmethod
+    def make_doc_mask_mod(
+        doc_ids: BoolTensor,
+        pad_mask_mod: MaskMod,
+    ) -> MaskMod:
+        """
+        pack multiple sequences into 512-len contexts.
+        allows to modulate with a padding mask.
+        """
+        def mask_mod(
+            batch: IntTensor,
+            head: IntTensor,
+            q_idx: IntTensor,
+            kv_idx: IntTensor,
+        ) -> BoolTensor:
+            same_doc = doc_ids[batch, q_idx] == doc_ids[batch, kv_idx]
+            inner_mask = pad_mask_mod(batch, head, q_idx, kv_idx)
+            return same_doc & inner_mask
+
+        return mask_mod
 
     def forward(
         self,
@@ -244,6 +265,44 @@ def make_self_attn_block_mask(
     block_mask: BlockMask = create_block_mask(
         mask_mod=mask_mod,
         B=mask.size(0),
+        H=1, # broadcast over all heads
+        Q_LEN=seq_len,
+        KV_LEN=seq_len,
+    )
+    return block_mask
+
+def make_self_attn_doc_block_mask(
+    doc_ids: IntTensor,
+    pad_mask: BoolTensor,
+    mask_pad_queries=True,
+    create_block_mask: CreateBlockMask = create_block_mask_c,
+) -> BlockMask:
+    """
+    doc_ids: [batch, ctx_len]
+        if you have multiple short prompts, you can pack them into the same 512-ctx.
+        tell us which prompt each token belongs to (e.g. [[0, 0, 0, 1, 1, ...]])
+    pad_mask: [batch, ctx_len]
+        if you can't fill the entire 512-ctx, you can indicate padding with zeros.
+    mask_pad_queries:
+        optimization to prevent pad queries from attending to anything, improving sparsity.
+        flex_attention's safe_softmax will output 0-probabilities for queries in pad positions.
+    """
+    from torch.nn.attention.flex_attention import create_block_mask
+    seq_len: int = doc_ids.size(-1)
+    make_pad_mask_mod: Callable[[BoolTensor], MaskMod] = (
+        T5EncoderSelfAttentionFlex.make_mask_mod_fast if mask_pad_queries else T5EncoderSelfAttentionFlex.make_mask_mod_compat
+    )
+    pad_mask_mod: MaskMod = make_pad_mask_mod(pad_mask)
+    doc_mask_mod: MaskMod = T5EncoderSelfAttentionFlex.make_doc_mask_mod(
+        doc_ids=doc_ids,
+        pad_mask_mod=pad_mask_mod,
+    )
+
+    assert callable(create_block_mask), "create_block_mask implementation was not callable"
+
+    block_mask: BlockMask = create_block_mask(
+        mask_mod=doc_mask_mod,
+        B=doc_ids.size(0),
         H=1, # broadcast over all heads
         Q_LEN=seq_len,
         KV_LEN=seq_len,

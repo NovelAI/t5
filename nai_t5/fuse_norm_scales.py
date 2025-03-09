@@ -81,9 +81,7 @@ def fuse_norm_scales_dec(
         ln1: RMSNormCast = fuse_ln_scales_into_lin(layer.self_attn.qkv_proj, layer.ln1, fuse_via_f32=fuse_via_f32)
         setattr(layer, 'ln1', ln1)
 
-        ln2, scale = extract_norm_scales(layer.ln2)
-        fuse_scales_into_lin_weight(layer.cross_attn.q_proj.weight, scale, fuse_via_f32=fuse_via_f32)
-        fuse_scales_into_lin_weight(layer.cross_attn.kv_proj.weight, scale, fuse_via_f32=fuse_via_f32)
+        ln2: RMSNormCast = fuse_ln_scales_into_lin(layer.cross_attn.q_proj, layer.ln2, fuse_via_f32=fuse_via_f32)
         setattr(layer, 'ln2', ln2)
 
         ln3: RMSNormCast = fuse_ln_scales_into_lin(layer.ffn.ff_in, layer.ln3, fuse_via_f32=fuse_via_f32)

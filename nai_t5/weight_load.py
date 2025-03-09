@@ -305,8 +305,10 @@ class FusingDeserializer(TensorDeserializer):
                 *(FusionSpec(
                     norm_weights=k,
                     linear_weights=(
+                        # fusing into one or the other is sufficient; Qs matmul with Ks anyway,
+                        # so the norm scale is shared.
                         k.replace('ln2', 'cross_attn.q_proj'),
-                        k.replace('ln2', 'cross_attn.kv_proj'),
+                        # k.replace('ln2', 'cross_attn.kv_proj'),
                     ),
                 ) for k in dec_keys if re.search(is_ln2, k)),
             )

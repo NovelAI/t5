@@ -8,7 +8,6 @@ setup(
     description='NovelAI T5',
     author='NovelAI/Anlatan Inc.',
     url='https://github.com/NovelAI/t5',
-    license='Apache-2.0',
     packages=['nai_t5'],
     install_requires=[
         'torch',

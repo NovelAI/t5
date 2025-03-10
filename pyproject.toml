@@ -19,7 +19,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nai-t5"
-version = "1.0.5"
+version = "1.0.6"
 description = "NovelAI T5"
 authors = [{name = "NovelAI/Anlatan Inc."}]
 readme = "README.md"
@@ -31,6 +31,10 @@ dependencies = [
     "einops",
     "pydantic",
 ]
+
+[project.urls]
+"Homepage" = "https://github.com/NovelAI/t5"
+"Issue Tracker" = "https://github.com/NovelAI/t5/issues"
 
 [project.optional-dependencies]
 hf = ["transformers", "tokenizers"]

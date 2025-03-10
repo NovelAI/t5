@@ -154,7 +154,7 @@ def main(args: Args):
             from gpu_poor.modules import LowPrecisionLinear
             replace_linear(nai_enc_flex, LowPrecisionLinear)
         nai_enc_flex.bind_score_mods(args.ctx_len)
-        def bind_nai_flex_fwd(nai_enc_sdpa: T5EncoderStack) -> NiladicModelFwd:
+        def bind_nai_flex_fwd(nai_enc: T5EncoderStack) -> NiladicModelFwd:
             from nai_t5.t5_encoder import make_self_attn_block_mask
             def fwd() -> FloatTensor:
                 if args.disable_block_mask:
@@ -164,7 +164,7 @@ def main(args: Args):
                         mask=bool_mask,
                         mask_pad_queries=args.flex_mask_pad_queries,
                     )
-                return nai_enc_sdpa(
+                return nai_enc(
                     input_ids,
                     block_mask=block_mask,
                 )

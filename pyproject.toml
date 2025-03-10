@@ -1,5 +1,19 @@
+[build-system]
+# note: these build system dependencies will be installed in
+# the isolated environment used by `python3 -m build`.
+# if you don't want to wait for torch installation, use a
+# non-isolated environment via `python3 -m build -n`.
+# I think they're only required because nai_t5/__init__.py imports them transitively.
+requires = ["setuptools", "torch", "einops", "pydantic"]
+build-backend = "setuptools.build_meta"
+
 [project]
-license = "Apache-2.0"
-license-files = [
-    "LICENSE",
-]
+name = "nai-t5"
+dynamic = ["version"]
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+keywords = ["t5", "novelai"]
+
+[tool.setuptools.dynamic]
+version = {attr = "nai_t5.__version__"}  # any module attribute compatible with ast.literal_eval

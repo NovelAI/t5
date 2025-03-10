@@ -331,6 +331,8 @@ Huggingface Transformers:
 }
 ```
 
+Graphcore, [Running Flan-T5‌-XL Inference In Float16‍ Fo‌r IPU - Ho‌w We D‌id It](https://www.graphcore.ai/posts/running-flan-t5-xl-inference-in-float16-for-ipu-how-we-did-it)
+
 ## License
 
 Apache 2.0. Uses code from [HF transformers](https://github.com/huggingface/transformers), which is [also Apache 2.0](https://github.com/huggingface/transformers/blob/main/LICENSE).

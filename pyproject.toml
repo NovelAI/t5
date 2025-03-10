@@ -13,13 +13,16 @@
 # upload to test PyPI:
 # python3 -m twine upload --repository testpypi dist/*
 
+# clean build & publish:
+# rm -rf dist/ build/ *.egg-info/ && python -m build && python3 -m twine upload --repository testpypi dist/*
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
 name = "nai-t5"
-version = "1.0.6"
+version = "1.0.7"
 description = "NovelAI T5"
 authors = [{name = "NovelAI/Anlatan Inc."}]
 readme = "README.md"
@@ -46,3 +49,12 @@ bench = ["tabulate", "triton"]
 t5_serialize = "nai_t5.scripts.t5_serialize:main"
 t5_serialize_dtensor = "nai_t5.scripts.t5_serialize_dtensor:main"
 tokenizer_hf_to_sentencepiece = "nai_t5.scripts.tokenizer_hf_to_sentencepiece:main"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "nai_t5/",
+  "pyproject.toml",
+  "README.md",
+  "LICENSE",
+  "requirements.txt",
+]

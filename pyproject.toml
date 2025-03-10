@@ -25,7 +25,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nai-t5"
-version = "1.0.8"
+version = "1.0.9"
 description = "NovelAI T5"
 authors = [{name = "NovelAI/Anlatan Inc."}]
 readme = "README.md"

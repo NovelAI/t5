@@ -11,7 +11,7 @@ We recommend to use Sentencepiece, in order to match how T5 was trained.
 T5 was trained on a masked language modelling objective, utilizing user-defined special tokens such `<extra_id_0>`, which get tokenized with high-precedence without being broken into subwords.
 
 The `spiece.model` that HF distributes, does not include these special tokens.  
-We offer a script [`tokenizer_hf_to_sentencepiece.py`](../scripts/tokenizer_hf_to_sentencepiece.py) which outputs a new `spiece.model` with the new special tokens included.
+We offer a script [`tokenizer_hf_to_sentencepiece.py`](../nai_t5/scripts/tokenizer_hf_to_sentencepiece.py) which outputs a new `spiece.model` with the new special tokens included.
 
 HF tokenizers instead uses custom tokenization logic to apply special tokens configured outside of `spiece.model`.  
 The behaviour of tokenization is not the same though:

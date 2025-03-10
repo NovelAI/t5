@@ -120,7 +120,7 @@ nai_flex (512 tokens)  True       552.8 TFLOP/s        8.8     114.1
 nai_flex   (1 token)   True       579.4 TFLOP/s        8.4     119.6
 ```
 
-Performance measured via [`benchmark_encoder.py`](scripts/benchmark_encoder.py), using environment:
+Performance measured via [`benchmark_encoder.py`](nai_t5/scripts/benchmark_encoder.py), using environment:
 
 ```
 transformers 4.49.0
@@ -135,7 +135,7 @@ NVIDIA H100 80GB HBM3
 Typical invocation:
 
 ```python
-python -m scripts.benchmark_encoder --ckpt v1_1-xxl --batch-size 1 --nai-fuse-norm-scales --bench-hf --bench-nai-sdpa --enable-cudnn-sdpa --bench-nai-flex
+python -m nai_t5.scripts.benchmark_encoder --ckpt v1_1-xxl --batch-size 1 --nai-fuse-norm-scales --bench-hf --bench-nai-sdpa --enable-cudnn-sdpa --bench-nai-flex
 ```
 
 There are initiatives in HF transformers to introduce [Flex attention](https://github.com/huggingface/transformers/pull/36103) and [SDPA](https://github.com/huggingface/transformers/pull/31167). These are still in review at the time of transformers v4.49.0.
@@ -200,7 +200,7 @@ HF float32 vs NAI f16:
 [3.7434e-05, 7.2266e-05, 1.1227e-04, 1.3884e-04, 1.9671e-04, 2.7551e-04, 4.2810e-04]
 ```
 
-Precision compared via [`t5_encoder_hf_precision_parity.py`](scripts/t5_encoder_hf_precision_parity.py), using environment:
+Precision compared via [`t5_encoder_hf_precision_parity.py`](nai_t5/scripts/t5_encoder_hf_precision_parity.py), using environment:
 
 ```
 transformers 4.49.0

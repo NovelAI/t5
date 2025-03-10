@@ -19,7 +19,7 @@ We avoid accumulation error from float16/bfloat16 summation, by maintaining a re
 Rather than _clipping_ activations: we _scale_ the weights of output projections (attention out and FFN out) and the residual itself (and RMSNorm eps).  
 This preserves the relative size difference between layer outputs and the residual, allowing outliers to be as large as they desire to be.  
 At any point in the model where we scale down the residual, we also scale down all out-projections after that by the same amount.  
-The process of selecting scales is manual. The script [`scripts/t5_encoder_precision_parity.py`](scripts/t5_encoder_precision_parity.py) tries to encode a sequence, and reports whether NaN is output by any layer. Should this happen, scales can be adjusted (i.e. by taking note of which layer encountered trouble and halving its scales). This process can be repeated until the test sequence succeeds. The script can also run the same sequence in float32 or bfloat16 in order to compare the absmax difference between the sequences, to determine whether the accuracy remains acceptable.
+The process of selecting scales is manual. The script [`t5_encoder_precision_parity.py`](../nai_t5/scripts/t5_encoder_precision_parity.py) tries to encode a sequence, and reports whether NaN is output by any layer. Should this happen, scales can be adjusted (i.e. by taking note of which layer encountered trouble and halving its scales). This process can be repeated until the test sequence succeeds. The script can also run the same sequence in float32 or bfloat16 in order to compare the absmax difference between the sequences, to determine whether the accuracy remains acceptable.
 
 Originally our encoder layer looked conventional:
 

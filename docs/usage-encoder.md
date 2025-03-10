@@ -158,12 +158,12 @@ _You can also fuse norm scales with the FusingDeserializer here, as above._
   deserializer.close()
 ```
 
-If you still encounter NaN outputs despite this: try using [`scripts/t5_encoder_precision_parity.py`](scripts/t5_encoder_precision_parity.py) to encode your prompt, and take note of the layer at which non-finite values are reported. Reduce scales at that layer and try again.
+If you still encounter NaN outputs despite this: try using [`../nai_t5/scripts/t5_encoder_precision_parity.py`](../nai_t5/scripts/t5_encoder_precision_parity.py) to encode your prompt, and take note of the layer at which non-finite values are reported. Reduce scales at that layer and try again.
 
 The same script includes suggested scales for T5v1.1 small, XL, and XXL.  
 These scales are chosen to be the smallest power-of-2 changes that allow the test sequence to be encoded, with the priority being to preserve float16 accuracy by not shrinking more than necessary. Consequently no headroom has been reserved, so it is possible that other prompts could exceed float16 range. The hope is that exposing control of this enables exploration.
 
-[`scripts/t5_encdec_precision_parity.py`](scripts/t5_encdec_precision_parity.py) likewise includes suggested _decoder_ scales for T5v1.1 small, XL, and XXL.
+[`scripts/t5_encdec_precision_parity.py`](../nai_t5/scripts/t5_encdec_precision_parity.py) likewise includes suggested _decoder_ scales for T5v1.1 small, XL, and XXL.
 
 ### Compilation
 
@@ -180,6 +180,6 @@ Ensure that you use a fixed input size (i.e. pad to a fixed context length to ke
 
 ### FSDP
 
-[`scripts/t5_encoder_parity_fsdp.py`](scripts/scripts/t5_encoder_parity_fsdp.py) demonstrates how to load the model in FSDP or FSDP2 from a distributed checkpoint.
+[`t5_encoder_parity_fsdp.py`](../nai_t5/scripts/t5_encoder_parity_fsdp.py) demonstrates how to load the model in FSDP or FSDP2 from a distributed checkpoint.
 
-[`t5_serialize_dtensor.py`](scripts/t5_serialize_dtensor.py) can be used to convert a tensorizer checkpoint into a sharded distributed tensor checkpoint.
+[`t5_serialize_dtensor.py`](../nai_t5/scripts/t5_serialize_dtensor.py) can be used to convert a tensorizer checkpoint into a sharded distributed tensor checkpoint.

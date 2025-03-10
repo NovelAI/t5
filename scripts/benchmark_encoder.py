@@ -97,7 +97,7 @@ def main(args: Args):
     })
 
     input_ids: LongTensor = torch.arange(args.ctx_len, device=device, dtype=torch.long).unsqueeze(0).repeat_interleave(args.batch_size, dim=0)
-    bool_mask: BoolTensor = (torch.arange(args.ctx_len, device=device, dtype=torch.long) > args.visible_tokens).unsqueeze(0).repeat_interleave(args.batch_size, dim=0)
+    bool_mask: BoolTensor = (torch.arange(args.ctx_len, device=device, dtype=torch.long) < args.visible_tokens).unsqueeze(0).repeat_interleave(args.batch_size, dim=0)
 
     bench_subjects: dict[BenchSubject, NiladicModelFwd] = {}
     bench_subjects_c: dict[BenchSubject, NiladicModelFwd] = {}

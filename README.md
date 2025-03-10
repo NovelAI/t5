@@ -6,11 +6,13 @@ Somewhat tested.
 
 ## Install
 
-Install the `nai-t5` package.  
-Currently distributed via GitHub only; we install via the repository URL.
+Install the `nai-t5` package.
 
 ```bash
-# installs nai-t5
+# installs nai-t5 from PyPI
+pip install nai_t5
+
+# or install from GitHub source like so:
 pip install git+https://github.com/NovelAI/t5.git
 ```
 

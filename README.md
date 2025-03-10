@@ -6,7 +6,7 @@ Somewhat tested.
 
 ## Install
 
-Install the `nai-t5` package.
+Install the `nai-t5` package, available [on PyPI](https://pypi.org/project/nai-t5/).
 
 ```bash
 # installs nai-t5 from PyPI

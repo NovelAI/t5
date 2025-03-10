@@ -1,6 +1,11 @@
 ## Usage
 
-The usage of these examples assumes you have already exported `--encdec` weights via tensorizer to a folder `ckpt/goog-t5-v1.1-small-bf16`. See [get weights](./get-weights.md) for details.
+The usage of these examples assumes you have already exported `--encdec` weights via tensorizer to a folder `ckpt/goog-t5-v1.1-small-bf16`. See [get weights](./get-weights.md) for more details, but here's an example that creates both `enc.tensors` (for encoder-only usage) and `encdec.tensors` (for encoder-decoder usage):
+
+```bash
+HF_HUB_ENABLE_HF_TRANSFER=1 t5_serialize -m google/t5-v1_1-small \
+--enc --encdec --weight-dtype bfloat16 --tensorizer -o ckpt/goog-t5-v1.1-small-bf16
+```
 
 ### Basic usage (encoder+decoder, KV-cache)
 

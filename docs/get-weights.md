@@ -25,8 +25,11 @@ ckpt/goog-t5-v1.1-small-bf16/config.json
 ckpt/goog-t5-v1.1-small-bf16/spiece.model # Sentencepiece model for T5 tokenization
 ```
 
-[`t5_serialize.py`](../nai_t5/scripts/t5_serialize.py) supports also an `--encdec` option to export encoder-decoder weights, 
-and a `--dtensor` option to export the checkpoint as a distributed checkpoint (which can be loaded in pytorch without further dependencies).
+`--weight-dtype bfloat16` can be changed to `--weight-dtype float16` if you intend to inference in float16 and wish to cast the weights ahead-of-time and save them, rather than casting them as you load your model.
+
+[`t5_serialize.py`](../nai_t5/scripts/t5_serialize.py) supports also an `--encdec` option to export encoder-decoder weights. This can be used simultaneously with `--enc` to output both `enc.tensors` and `encdec.tensors`.
+
+It also supports a `--dtensor` option to export the checkpoint as a distributed checkpoint (which can be loaded in pytorch without further dependencies).
 
 Google's T5 checkpoints were originally distributed in bfloat16.  
 Huggingface distributes them in float32, perhaps for compatibility reasons, but there is no extra precision in these larger checkpoints.  

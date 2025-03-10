@@ -78,20 +78,8 @@ See how we approached [docs/float16.md](float16 support).
 
 ## Precision
 
-Precision compared via [`t5_encoder_hf_precision_parity.py`](scripts/t5_encoder_hf_precision_parity.py), using environment:
+On T5v1.1 XXL, we compare HF vs nai-t5 half-precision implementations to see how close each gets to HF float32.
 
-```
-transformers 4.49.0
-torch 2.6.0
-CUDA 12.8
-Nvidia Driver Version: 535.216.01
-triton 3.2.0+git35c6c7c6
-apex layernorm **not** used by transformers (commented-out of modeling_t5.py to avoid import)
-NVIDIA H100 80GB HBM3
-nai-t5 using norm fusion but not using flex attention or torch compilation
-```
-
-On T5v1.1 XXL, we compare HF vs nai-t5 half-precision implementations to see how close each gets to HF float32.  
 nai-t5 half-precision implementations get closer than HF to the float32 reference in every quantile.
 
 ![Encoder precision](docs/encoder-precision.png)
@@ -109,6 +97,19 @@ HF float32 vs HF fp16:
 [4.7763e-05, 9.2119e-05, 1.4318e-04, 1.7839e-04, 2.4898e-04, 3.5743e-04, 6.5168e-04]
 HF float32 vs NAI f16:
 [3.7434e-05, 7.2266e-05, 1.1227e-04, 1.3884e-04, 1.9671e-04, 2.7551e-04, 4.2810e-04]
+```
+
+Precision compared via [`t5_encoder_hf_precision_parity.py`](scripts/t5_encoder_hf_precision_parity.py), using environment:
+
+```
+transformers 4.49.0
+torch 2.6.0
+CUDA 12.8
+Nvidia Driver Version: 535.216.01
+triton 3.2.0+git35c6c7c6
+apex layernorm **not** used by transformers (commented-out of modeling_t5.py to avoid import)
+NVIDIA H100 80GB HBM3
+nai-t5 using norm fusion but not using flex attention or torch compilation
 ```
 
 <!--

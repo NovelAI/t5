@@ -76,6 +76,107 @@ Typically you'll want to use the encoder, but the decoder can be useful for quer
 
 See how we approached [docs/float16.md](float16 support).
 
+Float16 is appealing because the precision is better, and because it can enable better performance on devices such as 3090 and 4090. Ordinarily these consumer cards are speed-limited computing float16 matmuls with float32 accumulation, but they support float16 matmul with float16 accumulation at higher speeds (with 4090 being comparable to A100).
+
+Support for float16 accumulation is [being added to pytorch](https://github.com/pytorch/pytorch/pull/144441).
+
+Split-k matmul can be used to recover the accuracy that float16 matmuls lose with a float16 accumulator.  
+See [CublasOps](https://github.com/aredden/torch-cublas-hgemm) for a cuBLAS implementation and [gpu_poor](https://github.com/sekstini/gpupoor) for a triton implementation of split-k matmul.
+
+## Performance
+
+nai-t5 supports two types of attention: [SDPA](https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html) and [Flex](https://pytorch.org/blog/flexattention/).
+
+T5 is challenging to run performantly, because its relative position bias requires applying an arbitrary bias in the attention calculation.  
+SDPA typically falls back to the slowest backend, cutlassF (memory-efficient attention), when arbitrary biases are required.  
+On H100s, SDPA can use the cuDNN backend as a faster alternative. It's unknown how reliable is cuDNN's correctness. We encountered correctness problems with cuDNN SDPA [during training](https://github.com/pytorch/pytorch/issues/139298), but perhaps inference on fixed workloads could be different.  
+HF computes attention manually via math operations. 
+
+Flex attention is a far faster way to implement complex attention patterns. We measured [a few approaches](https://github.com/pytorch/pytorch/issues/138493), but "just add an arbitrary bias" was the fastest under the parameters we tried.  
+Flex attention is only fast when compiled, because otherwise it falls back to a vmapped math attention.
+
+### Benchmark
+
+We measured the encoder performance of T5 v1.1 XXL at encoding a batch-of-1, 512-length context.
+
+For uncompiled inference, nai-t5 SDPA (cutlassF) is 60% faster than HF, or 68% with cuDNN.
+
+For compiled inference, nai-t5 SDPA (cutlassF) and HF are comparable. cuDNN is about 2% faster.
+nai-t5 Flex is 10% faster at 0% sparsity (full 512-length prompt).  
+nai-t5 Flex is 16% faster at 93.75% sparsity (1-token prompt).
+
+```
+Implementation        Compiled    FLOP/s           ms/iter    iter/s
+--------------------  ----------  -------------  ---------  --------
+hf                    False       226.6 TFLOP/s       21.4      46.8
+nai_sdpa (cutlassF)   False       363.5 TFLOP/s       13.3      75.0
+nai_sdpa (cuDNN)      False       381.5 TFLOP/s       12.7      78.7
+nai_flex (512 tokens) False        23.3 TFLOP/s      208.0       4.8
+nai_flex   (1 token)  False        23.2 TFLOP/s      208.9       4.8
+hf                     True       499.4 TFLOP/s        9.7     103.1
+nai_sdpa (cutlassF)    True       501.0 TFLOP/s        9.7     103.4
+nai_sdpa (cuDNN)       True       513.2 TFLOP/s        9.4     105.9
+nai_flex (512 tokens)  True       552.8 TFLOP/s        8.8     114.1
+nai_flex   (1 token)   True       579.4 TFLOP/s        8.4     119.6
+```
+
+Performance measured via [`benchmark_encoder.py`](scripts/benchmark_encoder.py), using environment:
+
+```
+transformers 4.49.0
+torch 2.6.0
+CUDA 12.8
+Nvidia Driver Version: 535.216.01
+triton 3.2.0+git35c6c7c6
+apex layernorm **not** used by transformers (commented-out of modeling_t5.py to avoid import)
+NVIDIA H100 80GB HBM3
+```
+
+Typical invocation:
+
+```python
+python -m scripts.benchmark_encoder --ckpt v1_1-xxl --batch-size 1 --nai-fuse-norm-scales --bench-hf --bench-nai-sdpa --enable-cudnn-sdpa --bench-nai-flex
+```
+
+There are initiatives in HF transformers to introduce [Flex attention](https://github.com/huggingface/transformers/pull/36103) and [SDPA](https://github.com/huggingface/transformers/pull/31167). These are still in review at the time of transformers v4.49.0.
+
+<!--
+This uses a lot of space to say very little. Let's keep things snappy.
+
+HF FLOP breakdown:
+
+```
+Module                        FLOP    % Total
+-----------------------  ---------  ---------
+T5EncoderModel           4844.723B    100.00%
+ - aten.mm               4741.644B     97.87%
+ - aten.bmm               103.079B      2.13%
+ T5EncoderModel.encoder  4844.723B    100.00%
+  - aten.mm              4741.644B     97.87%
+  - aten.bmm              103.079B      2.13%
+```
+
+NAI SDPA (cutlassF) FLOP breakdown:
+
+```
+Module                                                FLOP    % Total
+-----------------------------------------------  ---------  ---------
+T5EncoderStack                                   4844.723B    100.00%
+ - aten.mm                                       4741.644B     97.87%
+ - aten._scaled_dot_product_efficient_attention   103.079B      2.13%
+```
+
+NAI SDPA (cuDNN) FLOP breakdown:
+
+```
+Module                                            FLOP    % Total
+-------------------------------------------  ---------  ---------
+T5EncoderStack                               4844.723B    100.00%
+ - aten.mm                                   4741.644B     97.87%
+ - aten._scaled_dot_product_cudnn_attention   103.079B      2.13%
+```
+-->
+
 ## Precision
 
 On T5v1.1 XXL, we compare HF vs nai-t5 half-precision implementations to see how close each gets to HF float32.
@@ -152,3 +253,7 @@ Main objective was to modernize T5 with Torch SDPA attention and write in a clea
 We considered fusing the decoder's every cross-attention KV projection, but it's questionable whether this would provide any speedup (KV is work that can be done concurrently with Q anyway), and it would complicate FSDP (the very wide fused KV projection would need to be chunked to achieve good compute/communication overlap).
 
 MaskedTensor could be used to exploit sparsity on padded fixed-length sequences. Fixed-length sequences help to enable torch.compile dynamic=False. This would be particularly beneficial when inferencing the decoder, as the sequence length keeps changing (but could be modelled as a fixed-length MaskedTensor).
+
+## License
+
+Apache 2.0. Uses code from [HF transformers](https://github.com/huggingface/transformers), which is [also Apache 2.0](https://github.com/huggingface/transformers/blob/main/LICENSE).

@@ -1,3 +1,6 @@
+# delete old artifacts using:
+# rm -rf dist/ build/ *.egg-info/
+
 # build using 
 # python -m build
 

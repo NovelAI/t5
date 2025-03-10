@@ -1,19 +1,41 @@
+# build using 
+# python -m build
+
+# check artifact:
+# twine check dist/*
+
+# if it fails, try upgrading all this and building again:
+# pip install --upgrade build hatchling twine importlib-metadata
+
+# upload to test PyPI:
+# python3 -m twine upload --repository testpypi dist/*
+
 [build-system]
-# note: these build system dependencies will be installed in
-# the isolated environment used by `python3 -m build`.
-# if you don't want to wait for torch installation, use a
-# non-isolated environment via `python3 -m build -n`.
-# I think they're only required because nai_t5/__init__.py imports them transitively.
-requires = ["setuptools", "torch", "einops", "pydantic"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "nai-t5"
-dynamic = ["version"]
+version = "1.0.4"
+description = "NovelAI T5"
+authors = [{name = "NovelAI/Anlatan Inc."}]
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 keywords = ["t5", "novelai"]
+dependencies = [
+    "torch",
+    "einops",
+    "pydantic",
+]
 
-[tool.setuptools.dynamic]
-version = {attr = "nai_t5.__version__"}  # any module attribute compatible with ast.literal_eval
+[project.optional-dependencies]
+hf = ["transformers", "tokenizers"]
+sp = ["sentencepiece"]
+tensorizer = ["tensorizer"]
+bench = ["tabulate", "triton"]
+
+[project.scripts]
+t5_serialize = "scripts.t5_serialize:main"
+t5_serialize_dtensor = "scripts.t5_serialize_dtensor:main"
+tokenizer_hf_to_sentencepiece = "scripts.tokenizer_hf_to_sentencepiece:main"

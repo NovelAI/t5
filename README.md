@@ -76,7 +76,7 @@ Typically you'll want to use the encoder, but the decoder can be useful for quer
 
 ### Float16 considerations
 
-See how we approached [docs/float16.md](float16 support).
+See how we approached [float16 support](docs/float16.md).
 
 Float16 is appealing because the precision is better, and because it can enable better performance on devices such as 3090 and 4090. Ordinarily these consumer cards are speed-limited computing float16 matmuls with float32 accumulation, but they support float16 matmul with float16 accumulation at higher speeds (with 4090 being comparable to A100).
 

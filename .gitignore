@@ -4,3 +4,5 @@ __pycache__/
 /t5-ckpt/
 /t5-small/
 /ckpt/
+/dist/
+/*.egg-info/

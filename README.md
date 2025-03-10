@@ -254,6 +254,83 @@ We considered fusing the decoder's every cross-attention KV projection, but it's
 
 MaskedTensor could be used to exploit sparsity on padded fixed-length sequences. Fixed-length sequences help to enable torch.compile dynamic=False. This would be particularly beneficial when inferencing the decoder, as the sequence length keeps changing (but could be modelled as a fixed-length MaskedTensor).
 
+## References
+
+T5:
+
+```bibtex
+@article{10.5555/3455716.3455856,
+    author = {Raffel, Colin and Shazeer, Noam and Roberts, Adam and Lee, Katherine and Narang, Sharan and Matena, Michael and Zhou, Yanqi and Li, Wei and Liu, Peter J.},
+    title = {Exploring the limits of transfer learning with a unified text-to-text transformer},
+    year = {2020},
+    issue_date = {January 2020},
+    publisher = {JMLR.org},
+    volume = {21},
+    number = {1},
+    issn = {1532-4435},
+    abstract = {Transfer learning, where a model is first pre-trained on a data-rich task before being fine-tuned on a downstream task, has emerged as a powerful technique in natural language processing (NLP). The effectiveness of transfer learning has given rise to a diversity of approaches, methodology, and practice. In this paper, we explore the landscape of transfer learning techniques for NLP by introducing a unified framework that converts all text-based language problems into a text-to-text format. Our systematic study compares pretraining objectives, architectures, unlabeled data sets, transfer approaches, and other factors on dozens of language understanding tasks. By combining the insights from our exploration with scale and our new "Colossal Clean Crawled Corpus", we achieve state-of-the-art results on many benchmarks covering summarization, question answering, text classification, and more. To facilitate future work on transfer learning for NLP, we release our data set, pre-trained models, and code.},
+    journal = {J. Mach. Learn. Res.},
+    month = jan,
+    articleno = {140},
+    numpages = {67},
+    keywords = {transfer learning, natural language processing, multi-task learning, attention based models, deep learning}
+}
+```
+
+UMT5:
+
+```bibtex
+@inproceedings{chung2023unimax,
+    title={UniMax: Fairer and More Effective Language Sampling for Large-Scale Multilingual Pretraining},
+    author={Hyung Won Chung and Xavier Garcia and Adam Roberts and Yi Tay and Orhan Firat and Sharan Narang and Noah Constant},
+    booktitle={The Eleventh International Conference on Learning Representations },
+    year={2023},
+    url={https://openreview.net/forum?id=kXwdL1cWOAi}
+}
+```
+
+pile-t5:
+
+```bibtex
+@misc{2024PileT5,
+  author  = {Lintang Sutawika and Aran Komatsuzaki and Colin Raffel},
+  title   = {Pile-T5},
+  year    = {2024},
+  url     = {https://blog.eleuther.ai/pile-t5/},
+  note    = {Blog post},
+}
+```
+
+Flex attention:
+
+```bibtex
+@misc{li2024flexattention,
+      title={FlexAttention for Efficient High-Resolution Vision-Language Models}, 
+      author={Junyan Li and Delin Chen and Tianle Cai and Peihao Chen and Yining Hong and Zhenfang Chen and Yikang Shen and Chuang Gan},
+      year={2024},
+      eprint={2407.20228},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2407.20228}, 
+}
+```
+
+Huggingface Transformers:
+
+```bibtex
+@inproceedings{wolf-etal-2020-transformers,
+    title = "Transformers: State-of-the-Art Natural Language Processing",
+    author = "Thomas Wolf and Lysandre Debut and Victor Sanh and Julien Chaumond and Clement Delangue and Anthony Moi and Pierric Cistac and Tim Rault and Rémi Louf and Morgan Funtowicz and Joe Davison and Sam Shleifer and Patrick von Platen and Clara Ma and Yacine Jernite and Julien Plu and Canwen Xu and Teven Le Scao and Sylvain Gugger and Mariama Drame and Quentin Lhoest and Alexander M. Rush",
+    booktitle = "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing: System Demonstrations",
+    month = oct,
+    year = "2020",
+    address = "Online",
+    publisher = "Association for Computational Linguistics",
+    url = "https://www.aclweb.org/anthology/2020.emnlp-demos.6",
+    pages = "38--45"
+}
+```
+
 ## License
 
 Apache 2.0. Uses code from [HF transformers](https://github.com/huggingface/transformers), which is [also Apache 2.0](https://github.com/huggingface/transformers/blob/main/LICENSE).
